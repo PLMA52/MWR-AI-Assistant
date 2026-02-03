@@ -1,0 +1,30 @@
+name: AuraDB Keep-Alive
+
+on:
+  schedule:
+    # Runs every 2 days at 8:00 AM UTC
+    - cron: '0 8 */2 * *'
+  workflow_dispatch:  # Allows manual trigger from GitHub
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install neo4j
+      
+      - name: Run keepalive script
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+        run: python auradb_keepalive.py
