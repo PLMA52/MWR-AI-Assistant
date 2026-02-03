@@ -1,0 +1,38 @@
+name: BLS Unemployment Monthly Update
+
+on:
+  schedule:
+    - cron: '0 9 5 * *'
+  workflow_dispatch:
+
+jobs:
+  update-unemployment:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install neo4j requests
+      
+      - name: Run BLS unemployment update
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          BLS_API_KEY: ${{ secrets.BLS_API_KEY }}
+        run: python bls_neo4j_integration.py
+      
+      - name: Run FIPS fix
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          BLS_API_KEY: ${{ secrets.BLS_API_KEY }}
+        run: python fix_unemployment_fips.py
