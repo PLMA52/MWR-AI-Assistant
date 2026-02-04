@@ -74,7 +74,7 @@ DATABASE SCHEMA:
 {schema}
 
 KEY NODE TYPES:
-- ZipCode: Contains zip, county, state, fips, New_Risk_Score_Pct (0-100 risk score), New_Risk_Tier (Critical/High/Elevated/Moderate/Low), New_Combined_Risk_Score (0-500 scale), County_Risk_Score_Pct, HCF, MHJ, Current_Min_Wage, City_Jurisdictions, Industry_Carveouts, unemployment_rate (county unemployment % from BLS), unemployment_updated (date of last update)
+- ZipCode: Contains zip, county, state, fips, New_Risk_Score_Pct (0-100 risk score), New_Risk_Tier (Critical/High/Elevated/Moderate/Low), New_Combined_Risk_Score (0-500 scale), County_Risk_Score_Pct, HCF, MHJ, Current_Min_Wage, City_Jurisdictions, Industry_Carveouts, unemployment_rate (county unemployment % from BLS), unemployment_updated (date of last update), total_population (county population), median_household_income (median income in $), median_age (median age in years), median_home_value (median home value in $), college_educated_count (people with bachelor's or higher), census_updated (date of census data update)
 - State: Contains name, abbr (state abbreviation like 'CA', 'NY')
 - County: Contains name, fips
 - CBSA: Contains name, cbsa_code
@@ -96,6 +96,15 @@ UNEMPLOYMENT DATA:
 - unemployment_updated: Date when the data was last updated (e.g., "2026-02-03")
 - To get unemployment for a county: MATCH (z:ZipCode) WHERE z.county = "Boulder" AND z.state = "CO" RETURN DISTINCT z.county, z.state, z.unemployment_rate LIMIT 1
 - To find high unemployment counties: MATCH (z:ZipCode) WHERE z.unemployment_rate > 5 RETURN DISTINCT z.county, z.state, z.unemployment_rate ORDER BY z.unemployment_rate DESC
+
+DEMOGRAPHICS DATA (from Census):
+- total_population: County population count
+- median_household_income: Median household income in dollars
+- median_age: Median age in years
+- median_home_value: Median home value in dollars
+- college_educated_count: Number of people with bachelor's degree or higher
+- To get demographics for a county: MATCH (z:ZipCode) WHERE z.county = "Boulder" AND z.state = "CO" RETURN DISTINCT z.county, z.state, z.total_population, z.median_household_income, z.median_age LIMIT 1
+- To find wealthy counties: MATCH (z:ZipCode) WHERE z.median_household_income > 100000 RETURN DISTINCT z.county, z.state, z.median_household_income ORDER BY z.median_household_income DESC LIMIT 10
 
 IMPORTANT:
 - State abbreviations are stored in State.abbr (e.g., 'CA', 'NY', 'TX')
@@ -169,7 +178,13 @@ If there are many results, summarize the key findings.
 For unemployment data:
 - The unemployment_rate is a percentage (e.g., 3.4 means 3.4%)
 - Provide context: rates below 4% are generally considered low, 4-6% moderate, above 6% high
-- Explain business implications when relevant"""),
+- Explain business implications when relevant
+
+For demographics data:
+- Population helps understand market size
+- Median income indicates economic strength and wage expectations
+- Median age helps understand workforce demographics
+- Home values correlate with cost of living"""),
             ("human", """Question: {question}
 
 Database Results:
@@ -217,7 +232,9 @@ if __name__ == "__main__":
         "How many ZIP codes are in the Critical risk tier?",
         "What are the top 5 highest risk states?",
         "What is the unemployment rate in Boulder County, Colorado?",
-        "Which counties have unemployment above 5%?"
+        "Which counties have unemployment above 5%?",
+        "What is the population and median income in Los Angeles County?",
+        "Which counties have median household income above $100,000?"
     ]
     
     for question in test_questions:
