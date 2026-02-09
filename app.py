@@ -79,6 +79,10 @@ if "messages" not in st.session_state:
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
+# Track pending button question
+if "pending_question" not in st.session_state:
+    st.session_state.pending_question = None
+
 if "graph_rag" not in st.session_state:
     with st.spinner("🔄 Connecting to MWR database..."):
         try:
@@ -284,6 +288,21 @@ Previous Conversation:
             "conversation_history": conversation_context if conversation_context else "No previous conversation."
         })
 
+def process_question(question: str):
+    """Process a question and update chat history"""
+    # Add user message to display
+    st.session_state.messages.append({"role": "user", "content": question})
+    
+    # Generate response
+    response = generate_response(question)
+    
+    # Add assistant response to display
+    st.session_state.messages.append({"role": "assistant", "content": response})
+    
+    # Add to conversation history (session memory)
+    st.session_state.conversation_history.append({"role": "user", "content": question})
+    st.session_state.conversation_history.append({"role": "assistant", "content": response})
+
 # ============================================================
 # MAIN UI
 # ============================================================
@@ -305,71 +324,72 @@ else:
     st.error("❌ Not connected - check Neo4j")
     st.stop()
 
-# Quick action buttons
+# ============================================================
+# QUICK ACTION BUTTONS - FIXED VERSION
+# ============================================================
 col1, col2, col3, col4 = st.columns(4)
+
 with col1:
-    if st.button("📊 Top 5 Risk States", use_container_width=True):
-        st.session_state.messages.append({"role": "user", "content": "What are the top 5 highest risk states?"})
+    if st.button("📊 Top 5 Risk States", use_container_width=True, key="btn_top5"):
+        st.session_state.pending_question = "What are the top 5 highest risk states?"
+
 with col2:
-    if st.button("🔴 Critical ZIPs", use_container_width=True):
-        st.session_state.messages.append({"role": "user", "content": "How many ZIP codes are in the Critical risk tier?"})
+    if st.button("🔴 Critical ZIPs", use_container_width=True, key="btn_critical"):
+        st.session_state.pending_question = "How many ZIP codes are in the Critical risk tier?"
+
 with col3:
-    if st.button("☀️ California Risk", use_container_width=True):
-        st.session_state.messages.append({"role": "user", "content": "What is California's risk score and why?"})
+    if st.button("☀️ California Risk", use_container_width=True, key="btn_california"):
+        st.session_state.pending_question = "What is California's risk score and why?"
+
 with col4:
-    if st.button("🗞️ Latest News", use_container_width=True):
-        st.session_state.messages.append({"role": "user", "content": "What are the latest minimum wage news and changes?"})
+    if st.button("🗞️ Latest News", use_container_width=True, key="btn_news"):
+        st.session_state.pending_question = "What are the latest minimum wage news and changes?"
+
+# Process pending button question BEFORE displaying chat history
+if st.session_state.pending_question:
+    question = st.session_state.pending_question
+    st.session_state.pending_question = None  # Clear it
+    
+    with st.spinner("🔍 Analyzing..."):
+        process_question(question)
+    
+    st.rerun()  # Rerun to display the new messages
 
 st.divider()
 
-# Display chat history
+# ============================================================
+# DISPLAY CHAT HISTORY
+# ============================================================
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Chat input
+# ============================================================
+# CHAT INPUT
+# ============================================================
 if prompt := st.chat_input("Ask me anything about Minimum Wage Risk..."):
-    # Add user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    # Display user message immediately
     with st.chat_message("user"):
         st.markdown(prompt)
     
-    # Generate response
+    # Generate and display response
     with st.chat_message("assistant"):
         with st.spinner("🔍 Analyzing..."):
             response = generate_response(prompt)
             st.markdown(response)
     
-    # Add assistant response to display messages
+    # Update session state
+    st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.messages.append({"role": "assistant", "content": response})
-    
-    # Add to conversation history (session memory)
     st.session_state.conversation_history.append({"role": "user", "content": prompt})
     st.session_state.conversation_history.append({"role": "assistant", "content": response})
     
-    # Rerun to update the memory badge count
+    # Rerun to update memory badge
     st.rerun()
 
-# Process quick action buttons
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-    last_msg = st.session_state.messages[-1]["content"]
-    # Check if this message needs a response (from button click)
-    if len(st.session_state.messages) == 1 or st.session_state.messages[-2]["role"] == "assistant":
-        pass  # Already handled by chat input
-    else:
-        with st.chat_message("assistant"):
-            with st.spinner("🔍 Analyzing..."):
-                response = generate_response(last_msg)
-                st.markdown(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        
-        # Add to conversation history (session memory)
-        st.session_state.conversation_history.append({"role": "user", "content": last_msg})
-        st.session_state.conversation_history.append({"role": "assistant", "content": response})
-        
-        st.rerun()
-
-# Sidebar with info
+# ============================================================
+# SIDEBAR
+# ============================================================
 with st.sidebar:
     st.markdown("### ℹ️ About")
     st.markdown("""
@@ -403,4 +423,5 @@ with st.sidebar:
     if st.button("🗑️ Clear Chat & Memory"):
         st.session_state.messages = []
         st.session_state.conversation_history = []
+        st.session_state.pending_question = None
         st.rerun()
