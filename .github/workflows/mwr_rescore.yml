@@ -1,0 +1,68 @@
+name: MWR Monthly Re-Score
+
+on:
+  schedule:
+    # Runs on the 5th of every month at 10:00 AM UTC
+    # This is 1 hour AFTER bls_monthly.yml (9 AM UTC)
+    # So fresh BLS data is in Neo4j before we re-score
+    - cron: '0 10 5 * *'
+  workflow_dispatch:  # Allows manual trigger from GitHub Actions UI
+
+jobs:
+  rescore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy scikit-learn pyxlsb openpyxl neo4j
+          pip install xgboost catboost lightgbm || true
+
+      - name: Run MWR re-scoring pipeline
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          RESCORE_MODE: full
+          # Override file paths to use repo copies
+          MW_FILE: data/Min Wage Details State City and County current and future with July 2025 as current.xlsb
+          ERI_FILE: data/August 2025 Cost of Labor and Cost of Living ERI.xlsx
+          CBSA_FILE: data/April 2025 Zip Code to CBSA w Preferred City (Edit Version).xlsx
+          FRONTLINE_FILE: data/Frontline Job Desc Detail Comp Benchmark - Costing Model View by Zip Code (Winter 2026).xlsx
+          OUTPUT_CSV: MWR_Combined_ZipCode_Risk_v2.csv
+        run: python mwr_rescore.py
+
+      - name: Upload CSV to OneDrive via Microsoft Graph API
+        if: success()
+        env:
+          ONEDRIVE_CLIENT_ID: ${{ secrets.ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_CLIENT_SECRET: ${{ secrets.ONEDRIVE_CLIENT_SECRET }}
+          ONEDRIVE_TENANT_ID: ${{ secrets.ONEDRIVE_TENANT_ID }}
+          ONEDRIVE_REFRESH_TOKEN: ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
+        run: python upload_to_onedrive.py
+
+      - name: Save metrics as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescore-metrics-${{ github.run_number }}
+          path: |
+            mwr_rescore_metrics.json
+          retention-days: 90
+
+      - name: Update Neo4j with new scores
+        if: success()
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+        run: python update_neo4j_scores.py
