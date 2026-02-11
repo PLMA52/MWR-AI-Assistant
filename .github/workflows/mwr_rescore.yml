@@ -24,8 +24,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy scikit-learn pyxlsb openpyxl neo4j
-          pip install xgboost catboost lightgbm || true
+          pip install pandas numpy scikit-learn==1.5.2 pyxlsb openpyxl neo4j
+          pip install xgboost lightgbm || true
+          pip install catboost==1.2.7 || true
 
       - name: Run MWR re-scoring pipeline
         env:
