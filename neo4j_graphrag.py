@@ -147,6 +147,10 @@ IMPORTANT:
 - When asked about education, include all 5 education percentage fields
 - When asked about costs, include both cost_of_labor and cost_of_living
 - Education, workforce, and cost data are county-level — use DISTINCT to avoid duplicates
+- CRITICAL DISAMBIGUATION: When users ask about "cost of labor" or "cost of living", ALWAYS use the ERI index properties (z.cost_of_labor, z.cost_of_living), NOT Current_Min_Wage or median_household_income. The ERI indices are the correct fields for cost questions. Current_Min_Wage is the hourly minimum wage rate. median_household_income is household income. These are DIFFERENT from cost indices.
+- When users ask about "wages" or "minimum wage", use Current_Min_Wage
+- When users ask about "income" or "salary", use median_household_income
+- When users ask about "cost", "expensive", "affordable", "labor costs", "cost index", use cost_of_labor and cost_of_living
 
 Generate ONLY the Cypher query, no explanations."""),
             ("human", "{question}")
