@@ -2,10 +2,10 @@ name: MWR Monthly Re-Score
 
 on:
   schedule:
-    # Runs on the 5th of every month at 10:00 AM UTC
-    # This is 1 hour AFTER bls_monthly.yml (9 AM UTC)
-    # So fresh BLS data is in Neo4j before we re-score
-    - cron: '0 10 5 * *'
+    # Runs on the 15th of every month at 10:00 AM UTC
+    # BLS typically releases county data mid-month
+    # This runs 1 hour AFTER bls_monthly.yml (9 AM UTC)
+    - cron: '0 10 15 * *'
   workflow_dispatch:  # Allows manual trigger from GitHub Actions UI
 
 jobs:

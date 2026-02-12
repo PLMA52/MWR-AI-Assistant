@@ -2,7 +2,9 @@ name: BLS Unemployment Monthly Update
 
 on:
   schedule:
-    - cron: '0 9 5 * *'
+    # Runs on the 15th of every month at 9:00 AM UTC
+    # BLS typically releases county data mid-month
+    - cron: '0 9 15 * *'
   workflow_dispatch:
 
 jobs:
