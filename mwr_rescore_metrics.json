@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-02-11 17:56:34",
+  "best_model": "HistGradientBoosting",
+  "r2_train": 1.0,
+  "r2_cv": 0.9998,
+  "rmse": 0.1548,
+  "total_zips": 41554,
+  "features_used": 23
+}

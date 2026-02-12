@@ -74,7 +74,7 @@ DATABASE SCHEMA:
 {schema}
 
 KEY NODE TYPES:
-- ZipCode: Contains zip, county, state, fips, New_Risk_Score_Pct (0-100 risk score), New_Risk_Tier (Critical/High/Elevated/Moderate/Low), New_Combined_Risk_Score (0-500 scale), County_Risk_Score_Pct, HCF, MHJ, Current_Min_Wage, City_Jurisdictions, Industry_Carveouts, unemployment_rate (county unemployment % from BLS), unemployment_updated (date of last update), total_population (county population), median_household_income (median income in $), median_age (median age in years), median_home_value (median home value in $), college_educated_count (people with bachelor's or higher), census_updated (date of census data update)
+- ZipCode: Contains zip, county, state, fips, New_Risk_Score_Pct (0-100 risk score), New_Risk_Tier (Critical/High/Elevated/Moderate/Low), New_Combined_Risk_Score (0-500 scale), County_Risk_Score_Pct, HCF, MHJ, Current_Min_Wage, City_Jurisdictions, Industry_Carveouts, unemployment_rate (county unemployment % from BLS), unemployment_updated (date of last update), total_population (county population), median_household_income (median income in $), median_age (median age in years), median_home_value (median home value in $), college_educated_count (people with bachelor's or higher), census_updated (date of census data update), pct_no_diploma (% of 25+ population with no high school diploma), pct_hs_diploma (% with high school diploma or GED), pct_some_college (% with some college or associate's degree), pct_bachelors (% with bachelor's degree), pct_graduate (% with graduate/professional degree), workforce_population (estimated population ages 18-64), cost_of_labor (ERI Cost of Labor index, 100 = national average), cost_of_living (ERI Cost of Living index, 100 = national average)
 - State: Contains name, abbr (state abbreviation like 'CA', 'NY')
 - County: Contains name, fips
 - CBSA: Contains name, cbsa_code
@@ -106,13 +106,47 @@ DEMOGRAPHICS DATA (from Census):
 - To get demographics for a county: MATCH (z:ZipCode) WHERE z.county = "Boulder" AND z.state = "CO" RETURN DISTINCT z.county, z.state, z.total_population, z.median_household_income, z.median_age LIMIT 1
 - To find wealthy counties: MATCH (z:ZipCode) WHERE z.median_household_income > 100000 RETURN DISTINCT z.county, z.state, z.median_household_income ORDER BY z.median_household_income DESC LIMIT 10
 
+EDUCATION DATA (from Census B15003, for population 25+):
+- pct_no_diploma: Percentage with no high school diploma (includes all grade levels below HS completion)
+- pct_hs_diploma: Percentage with high school diploma or GED equivalent
+- pct_some_college: Percentage with some college or associate's degree
+- pct_bachelors: Percentage with bachelor's degree
+- pct_graduate: Percentage with graduate or professional degree (master's, doctorate, professional)
+- These 5 percentages sum to approximately 100% for each county
+- All education data is stored at the county level (same value for all ZIPs in a county)
+- To get education profile: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.pct_no_diploma, z.pct_hs_diploma, z.pct_some_college, z.pct_bachelors, z.pct_graduate LIMIT 1
+- To find highly educated counties: MATCH (z:ZipCode) WHERE z.pct_bachelors > 40 RETURN DISTINCT z.county, z.state, z.pct_bachelors, z.pct_graduate ORDER BY z.pct_bachelors DESC LIMIT 10
+- To find counties with low education: MATCH (z:ZipCode) WHERE z.pct_no_diploma > 20 RETURN DISTINCT z.county, z.state, z.pct_no_diploma ORDER BY z.pct_no_diploma DESC LIMIT 10
+
+WORKFORCE POPULATION DATA:
+- workforce_population: Estimated working-age population (ages 18-64) for the county
+- Calculated from Census B01001 (Sex by Age): Total Population - Under 18 - 65 and over
+- All ZIPs in a county share the same workforce_population value
+- To get workforce for a county: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.workforce_population, z.total_population LIMIT 1
+- To find large workforce markets: MATCH (z:ZipCode) WHERE z.workforce_population > 500000 RETURN DISTINCT z.county, z.state, z.workforce_population ORDER BY z.workforce_population DESC LIMIT 10
+
+ERI COST DATA (from Economic Research Institute):
+- cost_of_labor: ERI Cost of Labor index where 100 = national average. Values above 100 mean labor costs are higher than average. Example: 139.9 means labor costs are 39.9% above national average.
+- cost_of_living: ERI Cost of Living index where 100 = national average. Values above 100 mean cost of living is higher than average. Example: 221.6 means cost of living is 121.6% above national average.
+- Both are at the county level (same value for all ZIPs in a county)
+- To get cost data: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.cost_of_labor, z.cost_of_living LIMIT 1
+- To find expensive labor markets: MATCH (z:ZipCode) WHERE z.cost_of_labor > 120 RETURN DISTINCT z.county, z.state, z.cost_of_labor, z.cost_of_living ORDER BY z.cost_of_labor DESC LIMIT 10
+- To find affordable markets: MATCH (z:ZipCode) WHERE z.cost_of_living < 90 RETURN DISTINCT z.county, z.state, z.cost_of_living, z.cost_of_labor ORDER BY z.cost_of_living ASC LIMIT 10
+
+COMPREHENSIVE MARKET PROFILE:
+- When asked for a full market profile or "tell me everything about" a county, include: risk score, population, workforce, education, unemployment, income, cost of labor, cost of living
+- Example: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.New_Risk_Score_Pct, z.New_Risk_Tier, z.total_population, z.workforce_population, z.median_age, z.pct_no_diploma, z.pct_hs_diploma, z.pct_some_college, z.pct_bachelors, z.pct_graduate, z.unemployment_rate, z.median_household_income, z.cost_of_labor, z.cost_of_living LIMIT 1
+
 IMPORTANT:
 - State abbreviations are stored in State.abbr (e.g., 'CA', 'NY', 'TX')
 - The state field on ZipCode uses abbreviations like 'CO', 'CA', 'NY'
 - Always use LIMIT to prevent returning too many results
 - For state queries, use: MATCH (s:State {{abbr: 'CA'}})<-[:IN_STATE]-(z:ZipCode)
-- For county unemployment queries, filter by county name AND state: WHERE z.county = "Boulder" AND z.state = "CO"
+- For county queries, filter by county name AND state: WHERE z.county = "Boulder" AND z.state = "CO"
 - When asked about unemployment, always include unemployment_rate in the RETURN
+- When asked about education, include all 5 education percentage fields
+- When asked about costs, include both cost_of_labor and cost_of_living
+- Education, workforce, and cost data are county-level — use DISTINCT to avoid duplicates
 
 Generate ONLY the Cypher query, no explanations."""),
             ("human", "{question}")
@@ -184,7 +218,31 @@ For demographics data:
 - Population helps understand market size
 - Median income indicates economic strength and wage expectations
 - Median age helps understand workforce demographics
-- Home values correlate with cost of living"""),
+- Home values correlate with cost of living
+
+For education data:
+- Five education levels: No Diploma, HS Diploma, Some College, Bachelor's, Graduate
+- High pct_bachelors + pct_graduate indicates a highly educated workforce (higher wage expectations)
+- High pct_no_diploma may indicate vulnerable worker populations and potential compliance challenges
+- Compare to national averages when helpful: ~11% no diploma, ~27% HS, ~29% some college, ~21% bachelor's, ~13% graduate
+
+For workforce population:
+- workforce_population is the estimated population aged 18-64
+- This indicates the labor pool size available in a county
+- Compare to total_population to understand the working-age share (typically 60-70%)
+
+For ERI cost data:
+- cost_of_labor: Index where 100 = national average. Above 100 means more expensive labor market.
+- cost_of_living: Index where 100 = national average. Above 100 means higher cost of living.
+- High cost of labor (>120) means Sodexo likely needs higher wages to compete for talent
+- High cost of living (>150) means minimum wage may be insufficient for workers, increasing retention risk
+- These are critical for contract bidding — they indicate how much Sodexo needs to budget for labor
+- When both indices are high, it signals a very competitive and expensive market
+
+For comprehensive market profiles:
+- Synthesize all available data into a business narrative
+- Highlight factors that affect Sodexo's bidding strategy: risk level, labor costs, education mix, workforce size
+- Identify risks and opportunities: e.g., high education + high cost = competitive talent market"""),
             ("human", """Question: {question}
 
 Database Results:
@@ -234,7 +292,13 @@ if __name__ == "__main__":
         "What is the unemployment rate in Boulder County, Colorado?",
         "Which counties have unemployment above 5%?",
         "What is the population and median income in Los Angeles County?",
-        "Which counties have median household income above $100,000?"
+        "Which counties have median household income above $100,000?",
+        "What is the education breakdown in San Francisco County, California?",
+        "Which counties have the highest percentage of bachelor's degrees?",
+        "What is the cost of labor and cost of living in San Francisco?",
+        "Which counties have cost of labor above 130?",
+        "Give me a full market profile for Boulder County, Colorado",
+        "What is the workforce population in Los Angeles County?"
     ]
     
     for question in test_questions:

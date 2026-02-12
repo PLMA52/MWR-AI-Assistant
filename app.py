@@ -181,9 +181,9 @@ Rewritten standalone question:""")
 def classify_question(question: str) -> str:
     """Classify question type"""
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """Classify this question about Minimum Wage Risk:
-- DATABASE: Questions about specific data, scores, states, ZIP codes
-- WEB_SEARCH: Questions about current news, recent legislation
+        ("system", """Classify this question about Minimum Wage Risk and workforce market intelligence:
+- DATABASE: Questions about specific data, scores, states, ZIP codes, education levels, workforce population, cost of labor, cost of living, demographics, unemployment rates, market profiles
+- WEB_SEARCH: Questions about current news, recent legislation, pending bills
 - BOTH: Need both database and web info
 - GENERAL: General concepts, no specific data needed
 
@@ -245,10 +245,24 @@ def generate_response(question: str) -> str:
         context = "\n\n".join(context_parts)
         
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are the MWR AI Assistant for Sodexo. 
-Provide clear, concise answers about Minimum Wage Risk.
-Use the provided context to answer. Be business-friendly.
-Format with bullet points and headers when helpful.
+            ("system", """You are the MWR AI Assistant for Sodexo — a workforce market intelligence system.
+You help executives analyze Minimum Wage Risk, labor market conditions, and workforce demographics 
+to support contract bidding and strategic planning decisions.
+
+DATA AVAILABLE IN THE DATABASE:
+- Risk Scores: ZIP-level and county-level risk scores (0-100) with tiers (Critical/High/Elevated/Moderate/Low)
+- Education (5 levels): No Diploma %, HS Diploma %, Some College %, Bachelor's %, Graduate %
+- Workforce Population: Working-age population (18-64) by county
+- Cost of Labor: ERI index where 100 = national average (higher = more expensive labor)
+- Cost of Living: ERI index where 100 = national average (higher = more expensive area)
+- Unemployment Rate: County-level BLS unemployment data
+- Demographics: Total population, median income, median age, median home value
+- Geography: 40,000+ ZIP codes linked to counties, states, and CBSAs
+
+When answering, provide clear business insights. Use specific numbers from the data.
+Explain what the numbers mean for Sodexo's business — contract pricing, talent competition, wage pressures.
+When presenting education data, show all 5 levels to paint a complete workforce picture.
+When discussing costs, explain what high/low indices mean for bidding strategy.
 
 IMPORTANT: You have memory of this conversation. Use the conversation history 
 to understand context and provide coherent follow-up answers. If the user 
@@ -273,7 +287,9 @@ Provide a helpful answer:""")
     else:
         # General question - answer directly with conversation history
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are the MWR AI Assistant. Answer questions about minimum wage risk clearly and concisely.
+            ("system", """You are the MWR AI Assistant for Sodexo — a workforce market intelligence system.
+You help executives analyze minimum wage risk, labor costs, education demographics, and workforce data.
+Answer questions clearly and concisely with business context.
 
 IMPORTANT: You have memory of this conversation. Use the conversation history 
 to understand context and provide coherent follow-up answers.
@@ -394,17 +410,23 @@ with st.sidebar:
     st.markdown("### ℹ️ About")
     st.markdown("""
     **MWR AI Assistant** helps you analyze 
-    Minimum Wage Risk data.
+    workforce market intelligence data.
     
-    **You can ask:**
-    - Risk scores by state/ZIP
-    - Critical risk areas
+    **You can ask about:**
+    - Risk scores by state/ZIP/county
+    - Education demographics (5 levels)
+    - Workforce population (ages 18-64)
+    - Cost of labor & cost of living
+    - Unemployment rates
+    - Market profiles for bidding
     - Latest MW news
-    - What-if scenarios
     - **Follow-up questions!** 🧠
     
     **Data Sources:**
     - Neo4j MWR Database
+    - Census Bureau (ACS)
+    - ERI Economic Research
+    - BLS Unemployment Data
     - Tavily Web Search
     
     **Session Memory:**

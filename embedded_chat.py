@@ -144,9 +144,9 @@ Rewritten standalone question:""")
 # ============================================================
 def classify_question(question: str) -> str:
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """Classify this question about Minimum Wage Risk:
-- DATABASE: Questions about specific data, scores, states, ZIP codes
-- WEB_SEARCH: Questions about current news, recent legislation
+        ("system", """Classify this question about Minimum Wage Risk and workforce market intelligence:
+- DATABASE: Questions about specific data, scores, states, ZIP codes, education levels, workforce population, cost of labor, cost of living, demographics, unemployment rates, market profiles
+- WEB_SEARCH: Questions about current news, recent legislation, pending bills
 - BOTH: Need both database and web info
 - GENERAL: General concepts, no specific data needed
 Respond with ONLY one word: DATABASE, WEB_SEARCH, BOTH, or GENERAL"""),
@@ -195,10 +195,17 @@ def generate_response(question: str) -> str:
     if context_parts:
         context = "\n\n".join(context_parts)
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are the MWR AI Assistant for Sodexo. You are embedded inside a Power BI dashboard.
+            ("system", """You are the MWR AI Assistant for Sodexo, embedded inside a Power BI dashboard.
+You are a workforce market intelligence system that helps executives analyze minimum wage risk,
+labor costs, education demographics, and workforce data for contract bidding and strategic planning.
+
+DATA AVAILABLE: Risk scores, education (5 levels), workforce population (18-64), cost of labor,
+cost of living (ERI indices, 100=national avg), unemployment, demographics, 40,000+ ZIP codes.
+
 Keep answers CONCISE - executives want quick insights, not essays.
 Use bullet points for clarity. Limit responses to 3-5 key points.
 Include specific numbers when available.
+Explain business implications for Sodexo's bidding strategy.
 
 You have memory of this conversation. Use it for follow-ups.
 
@@ -219,7 +226,8 @@ Provide a concise answer:""")
         })
     else:
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are the MWR AI Assistant embedded in Power BI. Be concise and business-friendly.
+            ("system", """You are the MWR AI Assistant embedded in Power BI — a workforce market intelligence system.
+Be concise and business-friendly. You can answer about risk scores, education, labor costs, workforce data.
 
 Previous Conversation:
 {conversation_history}"""),
