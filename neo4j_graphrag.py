@@ -163,6 +163,7 @@ IMPORTANT:
 - When asked about costs, include both cost_of_labor and cost_of_living
 - Education, workforce, and cost data are county-level — use DISTINCT to avoid duplicates
 - When asked about age, age distribution, age breakout, or demographics by age, include all 8 pct_age fields
+- CRITICAL DISAMBIGUATION FOR AGE: When users ask about "age breakdown", "age breakout", "age distribution", "age profile", "age demographics", or "population by age", ALWAYS use the 8 pct_age properties (z.pct_age_0_to_9, z.pct_age_10_to_19, z.pct_age_20_to_29, z.pct_age_30_to_39, z.pct_age_40_to_49, z.pct_age_50_to_59, z.pct_age_60_to_69, z.pct_age_70_plus), NOT median_age. median_age is a single number (e.g., 39.3). The pct_age fields are the DETAILED decade-by-decade percentage breakout.
 - CRITICAL DISAMBIGUATION: When users ask about "cost of labor" or "cost of living", ALWAYS use the ERI index properties (z.cost_of_labor, z.cost_of_living), NOT Current_Min_Wage or median_household_income. The ERI indices are the correct fields for cost questions. Current_Min_Wage is the hourly minimum wage rate. median_household_income is household income. These are DIFFERENT from cost indices.
 - When users ask about "wages" or "minimum wage", use Current_Min_Wage
 - When users ask about "income" or "salary", use median_household_income
