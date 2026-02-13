@@ -74,7 +74,7 @@ DATABASE SCHEMA:
 {schema}
 
 KEY NODE TYPES:
-- ZipCode: Contains zip, county, state, fips, New_Risk_Score_Pct (0-100 risk score), New_Risk_Tier (Critical/High/Elevated/Moderate/Low), New_Combined_Risk_Score (0-500 scale), County_Risk_Score_Pct, HCF, MHJ, Current_Min_Wage, City_Jurisdictions, Industry_Carveouts, unemployment_rate (county unemployment % from BLS), unemployment_updated (date of last update), total_population (county population), median_household_income (median income in $), median_age (median age in years), median_home_value (median home value in $), college_educated_count (people with bachelor's or higher), census_updated (date of census data update), pct_no_diploma (% of 25+ population with no high school diploma), pct_hs_diploma (% with high school diploma or GED), pct_some_college (% with some college or associate's degree), pct_bachelors (% with bachelor's degree), pct_graduate (% with graduate/professional degree), workforce_population (estimated population ages 18-64), cost_of_labor (ERI Cost of Labor index, 100 = national average), cost_of_living (ERI Cost of Living index, 100 = national average)
+- ZipCode: Contains zip, county, state, fips, New_Risk_Score_Pct (0-100 risk score), New_Risk_Tier (Critical/High/Elevated/Moderate/Low), New_Combined_Risk_Score (0-500 scale), County_Risk_Score_Pct, HCF, MHJ, Current_Min_Wage, City_Jurisdictions, Industry_Carveouts, unemployment_rate (county unemployment % from BLS), unemployment_updated (date of last update), total_population (county population), median_household_income (median income in $), median_age (median age in years), median_home_value (median home value in $), college_educated_count (people with bachelor's or higher), census_updated (date of census data update), pct_no_diploma (% of 25+ population with no high school diploma), pct_hs_diploma (% with high school diploma or GED), pct_some_college (% with some college or associate's degree), pct_bachelors (% with bachelor's degree), pct_graduate (% with graduate/professional degree), workforce_population (estimated population ages 18-64), cost_of_labor (ERI Cost of Labor index, 100 = national average), cost_of_living (ERI Cost of Living index, 100 = national average), pct_age_0_to_9 (% of population aged 0-9), pct_age_10_to_19 (% aged 10-19), pct_age_20_to_29 (% aged 20-29), pct_age_30_to_39 (% aged 30-39), pct_age_40_to_49 (% aged 40-49), pct_age_50_to_59 (% aged 50-59), pct_age_60_to_69 (% aged 60-69), pct_age_70_plus (% aged 70+)
 - State: Contains name, abbr (state abbreviation like 'CA', 'NY')
 - County: Contains name, fips
 - CBSA: Contains name, cbsa_code
@@ -133,9 +133,24 @@ ERI COST DATA (from Economic Research Institute):
 - To find expensive labor markets: MATCH (z:ZipCode) WHERE z.cost_of_labor > 120 RETURN DISTINCT z.county, z.state, z.cost_of_labor, z.cost_of_living ORDER BY z.cost_of_labor DESC LIMIT 10
 - To find affordable markets: MATCH (z:ZipCode) WHERE z.cost_of_living < 90 RETURN DISTINCT z.county, z.state, z.cost_of_living, z.cost_of_labor ORDER BY z.cost_of_living ASC LIMIT 10
 
+AGE BREAKOUT DATA (8 decade groups, from demographic data):
+- pct_age_0_to_9: Percentage of population aged 0-9
+- pct_age_10_to_19: Percentage of population aged 10-19
+- pct_age_20_to_29: Percentage of population aged 20-29
+- pct_age_30_to_39: Percentage of population aged 30-39
+- pct_age_40_to_49: Percentage of population aged 40-49
+- pct_age_50_to_59: Percentage of population aged 50-59
+- pct_age_60_to_69: Percentage of population aged 60-69
+- pct_age_70_plus: Percentage of population aged 70+
+- These 8 percentages sum to approximately 100% for each county
+- All age data is stored at the county level (same value for all ZIPs in a county)
+- To get age profile: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.pct_age_0_to_9, z.pct_age_10_to_19, z.pct_age_20_to_29, z.pct_age_30_to_39, z.pct_age_40_to_49, z.pct_age_50_to_59, z.pct_age_60_to_69, z.pct_age_70_plus LIMIT 1
+- To find young workforce counties: MATCH (z:ZipCode) WHERE z.pct_age_20_to_29 > 18 RETURN DISTINCT z.county, z.state, z.pct_age_20_to_29 ORDER BY z.pct_age_20_to_29 DESC LIMIT 10
+- To find aging population counties: MATCH (z:ZipCode) WHERE z.pct_age_70_plus > 15 RETURN DISTINCT z.county, z.state, z.pct_age_70_plus ORDER BY z.pct_age_70_plus DESC LIMIT 10
+
 COMPREHENSIVE MARKET PROFILE:
-- When asked for a full market profile or "tell me everything about" a county, include: risk score, population, workforce, education, unemployment, income, cost of labor, cost of living
-- Example: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.New_Risk_Score_Pct, z.New_Risk_Tier, z.total_population, z.workforce_population, z.median_age, z.pct_no_diploma, z.pct_hs_diploma, z.pct_some_college, z.pct_bachelors, z.pct_graduate, z.unemployment_rate, z.median_household_income, z.cost_of_labor, z.cost_of_living LIMIT 1
+- When asked for a full market profile or "tell me everything about" a county, include: risk score, population, workforce, age breakout, education, unemployment, income, cost of labor, cost of living
+- Example: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.New_Risk_Score_Pct, z.New_Risk_Tier, z.total_population, z.workforce_population, z.median_age, z.pct_age_0_to_9, z.pct_age_10_to_19, z.pct_age_20_to_29, z.pct_age_30_to_39, z.pct_age_40_to_49, z.pct_age_50_to_59, z.pct_age_60_to_69, z.pct_age_70_plus, z.pct_no_diploma, z.pct_hs_diploma, z.pct_some_college, z.pct_bachelors, z.pct_graduate, z.unemployment_rate, z.median_household_income, z.cost_of_labor, z.cost_of_living LIMIT 1
 
 IMPORTANT:
 - State abbreviations are stored in State.abbr (e.g., 'CA', 'NY', 'TX')
@@ -147,6 +162,7 @@ IMPORTANT:
 - When asked about education, include all 5 education percentage fields
 - When asked about costs, include both cost_of_labor and cost_of_living
 - Education, workforce, and cost data are county-level — use DISTINCT to avoid duplicates
+- When asked about age, age distribution, age breakout, or demographics by age, include all 8 pct_age fields
 - CRITICAL DISAMBIGUATION: When users ask about "cost of labor" or "cost of living", ALWAYS use the ERI index properties (z.cost_of_labor, z.cost_of_living), NOT Current_Min_Wage or median_household_income. The ERI indices are the correct fields for cost questions. Current_Min_Wage is the hourly minimum wage rate. median_household_income is household income. These are DIFFERENT from cost indices.
 - When users ask about "wages" or "minimum wage", use Current_Min_Wage
 - When users ask about "income" or "salary", use median_household_income
@@ -246,7 +262,15 @@ For ERI cost data:
 For comprehensive market profiles:
 - Synthesize all available data into a business narrative
 - Highlight factors that affect Sodexo's bidding strategy: risk level, labor costs, education mix, workforce size
-- Identify risks and opportunities: e.g., high education + high cost = competitive talent market"""),
+- Identify risks and opportunities: e.g., high education + high cost = competitive talent market
+
+For age breakout data:
+- 8 decade groups: 0-9, 10-19, 20-29, 30-39, 40-49, 50-59, 60-69, 70+
+- High pct_age_20_to_29 and pct_age_30_to_39 indicates a young, active workforce — higher turnover but larger labor pool
+- High pct_age_50_to_59 and pct_age_60_to_69 indicates an aging workforce — potential retirement wave, harder to fill positions
+- High pct_age_70_plus indicates a retirement community — different service needs (healthcare, senior living)
+- High pct_age_0_to_9 indicates family-oriented community — may need family-friendly benefits to attract workers
+- Compare to business context: young workforce areas have more entry-level labor but higher turnover; aging areas need retention strategies"""),
             ("human", """Question: {question}
 
 Database Results:
