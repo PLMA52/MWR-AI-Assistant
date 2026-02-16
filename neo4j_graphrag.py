@@ -148,6 +148,19 @@ AGE BREAKOUT DATA (8 decade groups, from demographic data):
 - To find young workforce counties: MATCH (z:ZipCode) WHERE z.pct_age_20_to_29 > 18 RETURN DISTINCT z.county, z.state, z.pct_age_20_to_29 ORDER BY z.pct_age_20_to_29 DESC LIMIT 10
 - To find aging population counties: MATCH (z:ZipCode) WHERE z.pct_age_70_plus > 15 RETURN DISTINCT z.county, z.state, z.pct_age_70_plus ORDER BY z.pct_age_70_plus DESC LIMIT 10
 
+ERI HISTORICAL TREND DATA (Time-Series, 13 periods: May 2024 → January 2026):
+- eri_periods: List of 13 period labels ['2024-05', '2024-07', '2024-10', '2024-11', '2025-01', '2025-02', '2025-04', '2025-05', '2025-07', '2025-08', '2025-10', '2025-11', '2026-01']
+- eri_labor_history: List of 13 Cost of Labor index values corresponding to each period (0.0 means no data for that period)
+- eri_living_history: List of 13 Cost of Living index values corresponding to each period (0.0 means no data for that period)
+- These are stored as arrays on ZipCode nodes — each index position corresponds to the same index in eri_periods
+- Data is at ZIP level, so for county-level trends you need to average across ZIPs in the county
+- To get trend for a specific county: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" AND z.eri_periods IS NOT NULL RETURN DISTINCT z.county, z.state, z.eri_periods, z.eri_labor_history, z.eri_living_history LIMIT 1
+- To compare trends across counties: MATCH (z:ZipCode) WHERE z.county IN ["San Francisco", "Los Angeles", "San Diego"] AND z.state = "CA" AND z.eri_periods IS NOT NULL RETURN DISTINCT z.county, z.state, z.eri_periods, z.eri_labor_history, z.eri_living_history
+- To find the latest Cost of Labor value (Jan 2026 = index 12): MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" AND z.eri_labor_history IS NOT NULL RETURN DISTINCT z.county, z.state, z.eri_labor_history[12] AS latest_labor, z.eri_labor_history[0] AS earliest_labor LIMIT 1
+- To calculate overall change (first to last period): MATCH (z:ZipCode) WHERE z.state = "MD" AND z.eri_labor_history IS NOT NULL AND z.eri_labor_history[0] > 0 RETURN DISTINCT z.county, z.eri_labor_history[0] AS may_2024, z.eri_labor_history[12] AS jan_2026, round((z.eri_labor_history[12] - z.eri_labor_history[0]) / z.eri_labor_history[0] * 100, 2) AS pct_change ORDER BY pct_change DESC
+- IMPORTANT: When asked about "trend", "direction", "how has cost changed", "history of cost", always use eri_labor_history and eri_living_history arrays, NOT the single cost_of_labor/cost_of_living values
+- IMPORTANT: Values of 0.0 in the arrays mean data was not available for that period — exclude them from trend analysis
+
 COMPREHENSIVE MARKET PROFILE:
 - When asked for a full market profile or "tell me everything about" a county, include: risk score, population, workforce, age breakout, education, unemployment, income, cost of labor, cost of living
 - Example: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.New_Risk_Score_Pct, z.New_Risk_Tier, z.total_population, z.workforce_population, z.median_age, z.pct_age_0_to_9, z.pct_age_10_to_19, z.pct_age_20_to_29, z.pct_age_30_to_39, z.pct_age_40_to_49, z.pct_age_50_to_59, z.pct_age_60_to_69, z.pct_age_70_plus, z.pct_no_diploma, z.pct_hs_diploma, z.pct_some_college, z.pct_bachelors, z.pct_graduate, z.unemployment_rate, z.median_household_income, z.cost_of_labor, z.cost_of_living LIMIT 1
@@ -271,7 +284,16 @@ For age breakout data:
 - High pct_age_50_to_59 and pct_age_60_to_69 indicates an aging workforce — potential retirement wave, harder to fill positions
 - High pct_age_70_plus indicates a retirement community — different service needs (healthcare, senior living)
 - High pct_age_0_to_9 indicates family-oriented community — may need family-friendly benefits to attract workers
-- Compare to business context: young workforce areas have more entry-level labor but higher turnover; aging areas need retention strategies"""),
+- Compare to business context: young workforce areas have more entry-level labor but higher turnover; aging areas need retention strategies
+
+For ERI trend data (time-series):
+- The data spans 13 periods from May 2024 to January 2026 (approximately 20 months)
+- Present the trend as a narrative: "Cost of Labor in San Francisco started at 140.3 in May 2024, peaked at 141.3 in February 2025, and has since declined to 140.0 by January 2026"
+- Identify the direction: rising, declining, stable, or peaked/troughed
+- Calculate the overall change from first to last period as a percentage
+- Values of 0.0 mean no data was available for that period — skip these in analysis
+- Business context: Rising labor costs mean Sodexo needs to budget higher wages; declining costs may signal economic cooling
+- When presenting trends, list the period labels alongside the values for clarity"""),
             ("human", """Question: {question}
 
 Database Results:
@@ -327,7 +349,10 @@ if __name__ == "__main__":
         "What is the cost of labor and cost of living in San Francisco?",
         "Which counties have cost of labor above 130?",
         "Give me a full market profile for Boulder County, Colorado",
-        "What is the workforce population in Los Angeles County?"
+        "What is the workforce population in Los Angeles County?",
+        "What is the Cost of Labor trend in San Francisco?",
+        "How has the Cost of Living changed in Maryland over time?",
+        "Compare Cost of Labor trends between San Francisco, Los Angeles, and San Diego"
     ]
     
     for question in test_questions:
