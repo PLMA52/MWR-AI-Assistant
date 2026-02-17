@@ -247,9 +247,8 @@ def is_trend_question(question: str) -> bool:
 
 def fetch_trend_data(question: str) -> list:
     """Fetch ERI time-series data from Neo4j for charting.
-    Uses a simpler approach: extract location via LLM, query Neo4j directly."""
+    Uses LLM to generate Cypher, then queries Neo4j directly."""
     
-    # Use LLM to generate a Cypher query specifically for trend data
     cypher_prompt = ChatPromptTemplate.from_messages([
         ("system", """Generate a Neo4j Cypher query to fetch ERI time-series data.
 The ZipCode nodes have these properties:
@@ -259,13 +258,28 @@ The ZipCode nodes have these properties:
 - county: county name (e.g., 'San Francisco')
 - state: state abbreviation (e.g., 'CA')
 
-Return DISTINCT county, state, eri_periods, eri_labor_history, eri_living_history.
-Always add: WHERE ... AND z.eri_periods IS NOT NULL
-Always use LIMIT 1 per county.
+CRITICAL RULES:
+1. Always use DISTINCT to avoid duplicate rows
+2. Always include: AND z.eri_periods IS NOT NULL
+3. For a SINGLE county query, use LIMIT 1
+4. For state-level queries, return max 5 representative counties (use LIMIT 5)
+5. For comparison queries, return one row per county (LIMIT 1 per county, or use COLLECT)
+6. Return fields AS: county, state, periods, labor, living
 
 Examples:
-- "trend in San Francisco" → MATCH (z:ZipCode) WHERE z.county = 'San Francisco' AND z.state = 'CA' AND z.eri_periods IS NOT NULL RETURN DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living LIMIT 1
-- "compare SF and LA" → MATCH (z:ZipCode) WHERE z.county IN ['San Francisco', 'Los Angeles'] AND z.state = 'CA' AND z.eri_periods IS NOT NULL RETURN DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living
+- "trend in San Francisco" → 
+  MATCH (z:ZipCode) WHERE z.county = 'San Francisco' AND z.state = 'CA' AND z.eri_periods IS NOT NULL 
+  RETURN DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living LIMIT 1
+
+- "compare SF and LA" → 
+  MATCH (z:ZipCode) WHERE z.county IN ['San Francisco', 'Los Angeles'] AND z.state = 'CA' AND z.eri_periods IS NOT NULL 
+  WITH DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living 
+  RETURN county, state, periods, labor, living
+
+- "cost of living in Maryland" → 
+  MATCH (z:ZipCode) WHERE z.state = 'MD' AND z.eri_periods IS NOT NULL 
+  WITH DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living 
+  RETURN county, state, periods, labor, living LIMIT 5
 
 Return ONLY the Cypher query, nothing else."""),
         ("human", "{question}")
@@ -275,32 +289,35 @@ Return ONLY the Cypher query, nothing else."""),
     
     try:
         cypher = chain.invoke({"question": question}).strip()
-        # Clean up
         cypher = cypher.replace("```cypher", "").replace("```", "").strip()
-    except Exception as e:
+    except Exception:
         return []
     
-    # Execute the query
     try:
         driver = st.session_state.graph_rag.driver
         with driver.session() as session:
             result = session.run(cypher)
             records = [dict(r) for r in result]
-    except Exception as e:
+    except Exception:
         return []
     
-    # Format results
+    # Deduplicate by county name (take first per county)
+    seen = set()
     trend_results = []
     for r in records:
         if r.get("periods") and r.get("labor"):
-            trend_results.append({
-                "label": f"{r['county']}, {r['state']}",
-                "periods": r["periods"],
-                "labor": r["labor"],
-                "living": r["living"]
-            })
+            key = f"{r['county']}|{r['state']}"
+            if key not in seen:
+                seen.add(key)
+                trend_results.append({
+                    "label": f"{r['county']}, {r['state']}",
+                    "periods": r["periods"],
+                    "labor": r["labor"],
+                    "living": r["living"]
+                })
     
-    return trend_results
+    # Cap at 8 locations max for readability
+    return trend_results[:8]
 
 def detect_metric_type(question: str) -> str:
     """Detect whether the question is about labor, living, or both"""
