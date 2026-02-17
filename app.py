@@ -679,7 +679,7 @@ def generate_response(question: str) -> dict:
     else:
         chart_error = "no chart needed"
     
-    st.session_state["_chart_debug"] = chart_error
+    st.session_state["_chart_debug"] = f"q='{resolved_question[:60]}' | {chart_error}"
     
     # Step 3: Classify the resolved question
     q_type = classify_question(resolved_question)
@@ -852,10 +852,10 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         # Show if chart_data exists for debugging
-        #if message["role"] == "assistant":
-        #    has_chart = message.get("chart_data") is not None
-        #    debug_msg = st.session_state.get("_chart_debug", "N/A")
-        #    st.caption(f"🔧 chart_data: {has_chart} | debug: {debug_msg}")
+        if message["role"] == "assistant":
+            has_chart = message.get("chart_data") is not None
+            debug_msg = st.session_state.get("_chart_debug", "N/A")
+            st.caption(f"🔧 chart_data: {has_chart} | {debug_msg}")
         # Recreate and render chart from stored data if present
         if message.get("chart_data") is not None:
             try:
