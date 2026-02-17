@@ -262,23 +262,36 @@ def classify_chart_type(question: str) -> str:
         ("system", """You are a data visualization expert. Classify what chart type best answers this question.
 
 Chart types:
-- LINE_TREND: Time-series questions about how something changed over time (trends, history, trajectory)
+- LINE_TREND: ONLY for ERI Cost of Labor or Cost of Living time-series trends. We only have historical data for cost of labor and cost of living.
 - BAR_COMPARE: Side-by-side comparison of current values between 2-5 specific named locations
-- HBAR_RANK: Ranked list of items (top/bottom states, counties, highest/lowest risk, most expensive)
-- NONE: Question doesn't benefit from a chart (education breakdowns, general info, ZIP counts, news)
+- HBAR_RANK: Ranked list of items (top/bottom states, counties, highest/lowest risk, most expensive, highest unemployment, most educated)
+- NONE: Question doesn't benefit from a chart (single location info, education breakdowns, general info, ZIP counts, news)
 
-Rules:
+CRITICAL RULES:
+- LINE_TREND is ONLY for "cost of labor trend" or "cost of living trend" questions. We do NOT have time-series data for unemployment, risk, education, income, or population.
+- "unemployment trend" → NONE (no historical unemployment data available — only a single snapshot)
+- "risk trend" → NONE (no historical risk data)
+- "education trend" → NONE (no historical education data)
+- "income trend" → NONE
+- "which states have highest unemployment" → HBAR_RANK
+- "rank counties by education" → HBAR_RANK
+
+Examples:
 - "top 5 risk states" → HBAR_RANK
 - "highest risk counties" → HBAR_RANK
 - "most expensive states for labor" → HBAR_RANK
 - "which states have highest cost of labor" → HBAR_RANK
+- "which states have highest unemployment" → HBAR_RANK
 - "rank states by cost of living" → HBAR_RANK
+- "rank counties by education level" → HBAR_RANK
 - "cost of labor trend in SF" → LINE_TREND
-- "how has cost changed over time" → LINE_TREND
+- "how has cost of living changed over time" → LINE_TREND
+- "ERI trend in Maryland" → LINE_TREND
 - "compare cost of labor NY vs MD" → BAR_COMPARE
-- "bar chart of costs in SF vs LA" → BAR_COMPARE
 - "compare cost of living in San Francisco vs Los Angeles vs San Diego" → BAR_COMPARE
-- "what is California's risk?" → NONE (single value, no chart needed)
+- "what is California's risk?" → NONE
+- "unemployment trend in Montgomery County" → NONE (no time-series for unemployment)
+- "unemployment rate in Boulder" → NONE
 - "education breakdown in SF" → NONE
 - "how many critical ZIP codes" → NONE
 - "what are the latest minimum wage news" → NONE
@@ -851,12 +864,28 @@ def generate_response(question: str) -> dict:
     # Step 1: Resolve follow-up questions using conversation history
     resolved_question = resolve_follow_up(question)
     
+    # Reset trend unavailable flag
+    st.session_state["_trend_unavailable"] = False
+    
     # Step 2: Intelligent chart generation
     chart_data = None
     chart_error = None
     if should_generate_chart(resolved_question):
         try:
             chart_type = classify_chart_type(resolved_question)
+            
+            # Safety guard: LINE_TREND only valid for ERI cost data
+            if chart_type == "LINE_TREND":
+                q_check = resolved_question.lower()
+                has_eri_keywords = any(kw in q_check for kw in [
+                    'cost of labor', 'cost of living', 'eri', 'col ', 'coliv',
+                    'labor cost', 'living cost', 'labor trend', 'living trend'
+                ])
+                if not has_eri_keywords:
+                    chart_type = "NONE"
+                    # Store a friendly message for the user
+                    st.session_state["_trend_unavailable"] = True
+            
             chart_error = f"type={chart_type}"
             
             if chart_type == "LINE_TREND":
@@ -959,6 +988,9 @@ Provide a helpful answer:""")
             "context": context,
             "conversation_history": conversation_context if conversation_context else "No previous conversation."
         })
+        # Append trend unavailable note if applicable
+        if st.session_state.get("_trend_unavailable"):
+            text += "\n\n---\n📊 *Sorry, we don't have enough historical data to show a trend chart for this metric at this time. Trend charts are currently available for Cost of Labor and Cost of Living only.*"
         return {"text": text, "chart_data": chart_data}
     else:
         # General question - answer directly with conversation history
@@ -979,6 +1011,9 @@ Previous Conversation:
             "question": question,
             "conversation_history": conversation_context if conversation_context else "No previous conversation."
         })
+        # Append trend unavailable note if applicable
+        if st.session_state.get("_trend_unavailable"):
+            text += "\n\n---\n📊 *Sorry, we don't have enough historical data to show a trend chart for this metric at this time. Trend charts are currently available for Cost of Labor and Cost of Living only.*"
         return {"text": text, "chart_data": chart_data}
 
 def process_question(question: str):
