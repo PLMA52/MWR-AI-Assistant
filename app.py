@@ -607,10 +607,10 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         # Show if chart_data exists for debugging
-        if message["role"] == "assistant":
-            has_chart = message.get("chart_data") is not None
-            debug_msg = st.session_state.get("_chart_debug", "N/A")
-            st.caption(f"🔧 chart_data: {has_chart} | debug: {debug_msg}")
+        #if message["role"] == "assistant":
+        #    has_chart = message.get("chart_data") is not None
+        #    debug_msg = st.session_state.get("_chart_debug", "N/A")
+        #    st.caption(f"🔧 chart_data: {has_chart} | debug: {debug_msg}")
         # Recreate and render chart from stored data if present
         if message.get("chart_data") is not None:
             try:
@@ -636,10 +636,6 @@ if prompt := st.chat_input("Ask me anything about Minimum Wage Risk..."):
         with st.spinner("🔍 Analyzing..."):
             response = generate_response(prompt)
             st.markdown(response["text"])
-            # Show debug info (remove after testing)
-            debug = st.session_state.get("_chart_debug", "")
-            if debug:
-                st.caption(f"🔧 Debug: {debug}")
             # Render chart if data present
             if response.get("chart_data") is not None:
                 try:
