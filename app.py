@@ -16,7 +16,7 @@ from langchain_core.output_parsers import StrOutputParser
 import plotly.graph_objects as go
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -455,12 +455,19 @@ def generate_response(question: str) -> dict:
     # Step 2: Check if this is a trend question that needs a chart
     chart_fig = None
     if is_trend_question(resolved_question):
+        print(f"📊 Trend question detected: {resolved_question}")
         try:
             trend_data = fetch_trend_data(resolved_question)
+            print(f"📊 Trend data fetched: {len(trend_data)} locations")
             if trend_data:
+                for td in trend_data:
+                    print(f"   Location: {td['label']}, Periods: {len(td['periods'])}, Labor points: {len([v for v in td['labor'] if v > 0])}")
                 chart_fig = create_trend_chart(trend_data, resolved_question)
+                print(f"📊 Chart created: {chart_fig is not None}")
         except Exception as e:
-            pass  # Chart generation failed, still provide text answer
+            print(f"📊 Chart generation error: {e}")
+            import traceback
+            traceback.print_exc()
     
     # Step 3: Classify the resolved question
     q_type = classify_question(resolved_question)
