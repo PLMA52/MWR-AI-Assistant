@@ -454,20 +454,26 @@ def generate_response(question: str) -> dict:
     
     # Step 2: Check if this is a trend question that needs a chart
     chart_fig = None
+    chart_debug = []
     if is_trend_question(resolved_question):
-        print(f"📊 Trend question detected: {resolved_question}")
+        chart_debug.append(f"✅ Trend question detected")
         try:
             trend_data = fetch_trend_data(resolved_question)
-            print(f"📊 Trend data fetched: {len(trend_data)} locations")
+            chart_debug.append(f"✅ Trend data: {len(trend_data)} locations found")
             if trend_data:
                 for td in trend_data:
-                    print(f"   Location: {td['label']}, Periods: {len(td['periods'])}, Labor points: {len([v for v in td['labor'] if v > 0])}")
+                    chart_debug.append(f"   📍 {td['label']}: {len(td['periods'])} periods, Labor points: {len([v for v in td['labor'] if v > 0])}")
                 chart_fig = create_trend_chart(trend_data, resolved_question)
-                print(f"📊 Chart created: {chart_fig is not None}")
+                chart_debug.append(f"✅ Chart created: {chart_fig is not None}")
+            else:
+                chart_debug.append("⚠️ No trend data returned")
         except Exception as e:
-            print(f"📊 Chart generation error: {e}")
-            import traceback
-            traceback.print_exc()
+            chart_debug.append(f"❌ Error: {e}")
+    else:
+        chart_debug.append(f"ℹ️ Not a trend question")
+    
+    # Store debug info temporarily (remove after testing)
+    st.session_state["_chart_debug"] = chart_debug
     
     # Step 3: Classify the resolved question
     q_type = classify_question(resolved_question)
@@ -656,6 +662,11 @@ if prompt := st.chat_input("Ask me anything about Minimum Wage Risk..."):
         with st.spinner("🔍 Analyzing..."):
             response = generate_response(prompt)
             st.markdown(response["text"])
+            # Show chart debug info (remove after testing)
+            if st.session_state.get("_chart_debug"):
+                with st.expander("📊 Chart Debug Info"):
+                    for line in st.session_state["_chart_debug"]:
+                        st.write(line)
             if response.get("chart") is not None:
                 st.plotly_chart(response["chart"], use_container_width=True)
     
