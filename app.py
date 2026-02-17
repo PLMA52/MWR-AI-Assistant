@@ -237,13 +237,33 @@ PERIOD_LABELS = {
 }
 
 def is_trend_question(question: str) -> bool:
-    """Detect if a question is asking about trends/history that would benefit from a chart"""
-    trend_keywords = [
+    """Detect if a question would benefit from a chart (trend, comparison, bar chart, etc.)"""
+    chart_keywords = [
         'trend', 'over time', 'history', 'historical', 'changed', 'change',
         'direction', 'compare trend', 'show trend', 'chart', 'graph', 'plot',
-        'how has', 'what happened to', 'evolve', 'movement', 'trajectory'
+        'how has', 'what happened to', 'evolve', 'movement', 'trajectory',
+        'bar chart', 'compare', 'comparison', 'versus', ' vs ', ' vs.'
     ]
-    return any(kw in question.lower() for kw in trend_keywords)
+    return any(kw in question.lower() for kw in chart_keywords)
+
+def detect_chart_type(question: str) -> str:
+    """Determine whether to show a line chart (trend) or bar chart (snapshot comparison)"""
+    bar_keywords = ['bar chart', 'bar graph', 'compare cost', 'comparing cost', 
+                    'comparison of cost', 'current cost']
+    trend_keywords = ['trend', 'over time', 'history', 'historical', 'changed',
+                      'how has', 'trajectory', 'movement', 'evolve']
+    
+    q_lower = question.lower()
+    has_bar = any(kw in q_lower for kw in bar_keywords)
+    has_trend = any(kw in q_lower for kw in trend_keywords)
+    
+    # If explicitly asking for bar chart, or comparing without mentioning trend
+    if has_bar and not has_trend:
+        return "bar"
+    # If comparing with "vs" but no trend words, default to bar
+    if (' vs ' in q_lower or 'versus' in q_lower or 'compare' in q_lower) and not has_trend:
+        return "bar"
+    return "line"
 
 def fetch_trend_data(question: str) -> list:
     """Fetch ERI time-series data from Neo4j for charting.
@@ -427,6 +447,84 @@ def create_trend_chart(trend_data: list, question: str) -> go.Figure:
     )
     
     return fig
+
+def create_bar_chart(trend_data: list, question: str) -> go.Figure:
+    """Create a bar chart comparing current (latest period) values across locations"""
+    metric_type = detect_metric_type(question)
+    
+    if not trend_data:
+        return None
+    
+    labels = []
+    labor_values = []
+    living_values = []
+    
+    for loc in trend_data:
+        labels.append(loc["label"])
+        # Get latest non-zero value
+        labor_vals = [v for v in loc["labor"] if v > 0]
+        living_vals = [v for v in loc["living"] if v > 0]
+        labor_values.append(labor_vals[-1] if labor_vals else 0)
+        living_values.append(living_vals[-1] if living_vals else 0)
+    
+    fig = go.Figure()
+    
+    if metric_type in ["labor", "both"]:
+        fig.add_trace(go.Bar(
+            x=labels, y=labor_values,
+            name="Cost of Labor",
+            marker_color=CHART_COLORS[0],
+            text=[f"{v:.1f}" for v in labor_values],
+            textposition='outside',
+            hovertemplate='%{x}<br>Cost of Labor: %{y:.1f}<extra></extra>'
+        ))
+    
+    if metric_type in ["living", "both"]:
+        fig.add_trace(go.Bar(
+            x=labels, y=living_values,
+            name="Cost of Living",
+            marker_color=CHART_COLORS[1],
+            text=[f"{v:.1f}" for v in living_values],
+            textposition='outside',
+            hovertemplate='%{x}<br>Cost of Living: %{y:.1f}<extra></extra>'
+        ))
+    
+    # Determine title
+    if metric_type == "labor":
+        title = "Cost of Labor Comparison (Latest Period)"
+    elif metric_type == "living":
+        title = "Cost of Living Comparison (Latest Period)"
+    else:
+        title = "ERI Cost Comparison (Latest Period)"
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=18, color='#1B4F5C')),
+        xaxis_title="Location",
+        yaxis_title="ERI Index (100 = National Average)",
+        barmode='group',
+        template='plotly_white',
+        height=450,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+        margin=dict(l=60, r=30, t=60, b=80),
+        yaxis=dict(gridcolor='#E8E8E8')
+    )
+    
+    # Add reference line at 100
+    fig.add_hline(
+        y=100, line_dash="dot", line_color="#999999", line_width=1,
+        annotation_text="National Avg (100)", annotation_position="bottom right",
+        annotation_font_color="#999999"
+    )
+    
+    return fig
+
+def create_chart(trend_data: list, question: str) -> go.Figure:
+    """Router: pick the right chart type based on the question"""
+    chart_type = detect_chart_type(question)
+    if chart_type == "bar":
+        return create_bar_chart(trend_data, question)
+    else:
+        return create_trend_chart(trend_data, question)
 
 def generate_response(question: str) -> dict:
     """Generate comprehensive response with session memory. Returns dict with 'text' and optional 'chart'."""
@@ -632,9 +730,10 @@ for message in st.session_state.messages:
         if message.get("chart_data") is not None:
             try:
                 cd = message["chart_data"]
-                fig = create_trend_chart(cd["trend_data"], cd["question"])
+                fig = create_chart(cd["trend_data"], cd["question"])
                 if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+                    chart_key = f"chart_{id(message)}_{hash(message['content'][:50])}"
+                    st.plotly_chart(fig, use_container_width=True, key=chart_key)
                 else:
                     st.warning("Chart function returned None")
             except Exception as e:
@@ -657,9 +756,9 @@ if prompt := st.chat_input("Ask me anything about Minimum Wage Risk..."):
             if response.get("chart_data") is not None:
                 try:
                     cd = response["chart_data"]
-                    fig = create_trend_chart(cd["trend_data"], cd["question"])
+                    fig = create_chart(cd["trend_data"], cd["question"])
                     if fig:
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True, key="chart_live")
                 except Exception as e:
                     st.error(f"Chart error: {e}")
     
