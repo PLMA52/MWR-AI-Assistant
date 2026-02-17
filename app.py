@@ -635,6 +635,10 @@ st.divider()
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        # Show if chart_data exists for debugging
+        if message["role"] == "assistant":
+            has_chart = message.get("chart_data") is not None
+            st.caption(f"🔧 chart_data present: {has_chart}")
         # Recreate and render chart from stored data if present
         if message.get("chart_data") is not None:
             try:
@@ -642,8 +646,10 @@ for message in st.session_state.messages:
                 fig = create_trend_chart(cd["trend_data"], cd["question"])
                 if fig:
                     st.plotly_chart(fig, use_container_width=True)
-            except Exception:
-                pass
+                else:
+                    st.warning("Chart function returned None")
+            except Exception as e:
+                st.error(f"Chart render error: {e}")
 
 # ============================================================
 # CHAT INPUT
