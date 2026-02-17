@@ -246,96 +246,61 @@ def is_trend_question(question: str) -> bool:
     return any(kw in question.lower() for kw in trend_keywords)
 
 def fetch_trend_data(question: str) -> list:
-    """Fetch ERI time-series data from Neo4j for charting"""
-    driver = st.session_state.graph_rag.driver
+    """Fetch ERI time-series data from Neo4j for charting.
+    Uses a simpler approach: extract location via LLM, query Neo4j directly."""
     
-    # Use LLM to extract location(s) from the question
-    extract_prompt = ChatPromptTemplate.from_messages([
-        ("system", """Extract location(s) from this question about cost trends. 
-Return a JSON array of objects with 'county' and 'state' (2-letter abbreviation).
+    # Use LLM to generate a Cypher query specifically for trend data
+    cypher_prompt = ChatPromptTemplate.from_messages([
+        ("system", """Generate a Neo4j Cypher query to fetch ERI time-series data.
+The ZipCode nodes have these properties:
+- eri_periods: list of period labels like ['2024-05', '2024-07', ...]
+- eri_labor_history: list of Cost of Labor values per period
+- eri_living_history: list of Cost of Living values per period
+- county: county name (e.g., 'San Francisco')
+- state: state abbreviation (e.g., 'CA')
+
+Return DISTINCT county, state, eri_periods, eri_labor_history, eri_living_history.
+Always add: WHERE ... AND z.eri_periods IS NOT NULL
+Always use LIMIT 1 per county.
 
 Examples:
-- "Cost of Labor trend in San Francisco" → [{"county": "San Francisco", "state": "CA"}]
-- "Compare costs in San Francisco and Los Angeles" → [{"county": "San Francisco", "state": "CA"}, {"county": "Los Angeles", "state": "CA"}]
-- "How has cost changed in Maryland" → [{"county": "__STATE__", "state": "MD"}]
-- "Cost trend in Boulder County Colorado" → [{"county": "Boulder", "state": "CO"}]
+- "trend in San Francisco" → MATCH (z:ZipCode) WHERE z.county = 'San Francisco' AND z.state = 'CA' AND z.eri_periods IS NOT NULL RETURN DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living LIMIT 1
+- "compare SF and LA" → MATCH (z:ZipCode) WHERE z.county IN ['San Francisco', 'Los Angeles'] AND z.state = 'CA' AND z.eri_periods IS NOT NULL RETURN DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living
 
-If a STATE is mentioned (not a specific county), use "__STATE__" as county to indicate all counties.
-Return ONLY the JSON array, nothing else."""),
+Return ONLY the Cypher query, nothing else."""),
         ("human", "{question}")
     ])
     
-    chain = extract_prompt | st.session_state.llm | StrOutputParser()
+    chain = cypher_prompt | st.session_state.llm | StrOutputParser()
     
     try:
-        raw = chain.invoke({"question": question}).strip()
-        # Clean JSON
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        locations = json.loads(raw)
-    except:
+        cypher = chain.invoke({"question": question}).strip()
+        # Clean up
+        cypher = cypher.replace("```cypher", "").replace("```", "").strip()
+    except Exception as e:
         return []
     
-    results = []
+    # Execute the query
+    try:
+        driver = st.session_state.graph_rag.driver
+        with driver.session() as session:
+            result = session.run(cypher)
+            records = [dict(r) for r in result]
+    except Exception as e:
+        return []
     
-    with driver.session() as session:
-        for loc in locations:
-            county = loc.get("county", "")
-            state = loc.get("state", "")
-            
-            if county == "__STATE__":
-                # State-level: average across all counties in the state
-                query = """
-                MATCH (z:ZipCode) 
-                WHERE z.state = $state AND z.eri_periods IS NOT NULL AND z.eri_labor_history IS NOT NULL
-                WITH z.eri_periods AS periods, 
-                     z.eri_labor_history AS labor, 
-                     z.eri_living_history AS living
-                LIMIT 1
-                RETURN periods AS periods
-                """
-                period_result = session.run(query, state=state).single()
-                if not period_result:
-                    continue
-                periods = period_result["periods"]
-                
-                # Get averages per period for the state
-                labor_avgs = []
-                living_avgs = []
-                for i in range(len(periods)):
-                    avg_query = f"""
-                    MATCH (z:ZipCode) 
-                    WHERE z.state = $state AND z.eri_labor_history IS NOT NULL AND z.eri_labor_history[{i}] > 0
-                    RETURN avg(z.eri_labor_history[{i}]) AS avg_labor, avg(z.eri_living_history[{i}]) AS avg_living
-                    """
-                    avg_result = session.run(avg_query, state=state).single()
-                    labor_avgs.append(round(avg_result["avg_labor"], 2) if avg_result["avg_labor"] else 0)
-                    living_avgs.append(round(avg_result["avg_living"], 2) if avg_result["avg_living"] else 0)
-                
-                results.append({
-                    "label": state,
-                    "periods": periods,
-                    "labor": labor_avgs,
-                    "living": living_avgs
-                })
-            else:
-                # County-level
-                query = """
-                MATCH (z:ZipCode) 
-                WHERE z.county = $county AND z.state = $state AND z.eri_periods IS NOT NULL
-                RETURN DISTINCT z.county AS county, z.state AS state, 
-                       z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living
-                LIMIT 1
-                """
-                record = session.run(query, county=county, state=state).single()
-                if record:
-                    results.append({
-                        "label": f"{record['county']}, {record['state']}",
-                        "periods": record["periods"],
-                        "labor": record["labor"],
-                        "living": record["living"]
-                    })
+    # Format results
+    trend_results = []
+    for r in records:
+        if r.get("periods") and r.get("labor"):
+            trend_results.append({
+                "label": f"{r['county']}, {r['state']}",
+                "periods": r["periods"],
+                "labor": r["labor"],
+                "living": r["living"]
+            })
     
-    return results
+    return trend_results
 
 def detect_metric_type(question: str) -> str:
     """Detect whether the question is about labor, living, or both"""
@@ -460,13 +425,16 @@ def generate_response(question: str) -> dict:
             trend_data = fetch_trend_data(resolved_question)
             if trend_data:
                 chart_data = {"trend_data": trend_data, "question": resolved_question}
+                chart_error = f"OK: {len(trend_data)} locations"
             else:
-                chart_error = "fetch_trend_data returned empty"
+                chart_error = "fetch returned empty list"
         except Exception as e:
-            chart_error = f"fetch_trend_data error: {e}"
+            chart_error = str(e)[:200]
+    else:
+        chart_error = "not a trend question"
     
     # Store debug info
-    st.session_state["_chart_debug"] = chart_error or "OK"
+    st.session_state["_chart_debug"] = chart_error
     
     # Step 3: Classify the resolved question
     q_type = classify_question(resolved_question)
