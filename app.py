@@ -453,27 +453,17 @@ def generate_response(question: str) -> dict:
     resolved_question = resolve_follow_up(question)
     
     # Step 2: Check if this is a trend question that needs a chart
-    chart_fig = None
-    chart_debug = []
+    chart_data = None
     if is_trend_question(resolved_question):
-        chart_debug.append(f"✅ Trend question detected")
         try:
             trend_data = fetch_trend_data(resolved_question)
-            chart_debug.append(f"✅ Trend data: {len(trend_data)} locations found")
             if trend_data:
-                for td in trend_data:
-                    chart_debug.append(f"   📍 {td['label']}: {len(td['periods'])} periods, Labor points: {len([v for v in td['labor'] if v > 0])}")
-                chart_fig = create_trend_chart(trend_data, resolved_question)
-                chart_debug.append(f"✅ Chart created: {chart_fig is not None}")
-            else:
-                chart_debug.append("⚠️ No trend data returned")
-        except Exception as e:
-            chart_debug.append(f"❌ Error: {e}")
-    else:
-        chart_debug.append(f"ℹ️ Not a trend question")
+                chart_data = {"trend_data": trend_data, "question": resolved_question}
+        except Exception:
+            pass  # Chart data fetch failed, still provide text answer
     
-    # Store debug info temporarily (remove after testing)
-    st.session_state["_chart_debug"] = chart_debug
+    # Store debug info temporarily
+    st.session_state["_chart_debug"] = f"is_trend={is_trend_question(resolved_question)}, data={'yes' if chart_data else 'no'}"
     
     # Step 3: Classify the resolved question
     q_type = classify_question(resolved_question)
@@ -544,7 +534,7 @@ Provide a helpful answer:""")
             "context": context,
             "conversation_history": conversation_context if conversation_context else "No previous conversation."
         })
-        return {"text": text, "chart": chart_fig}
+        return {"text": text, "chart_data": chart_data}
     else:
         # General question - answer directly with conversation history
         prompt = ChatPromptTemplate.from_messages([
@@ -564,7 +554,7 @@ Previous Conversation:
             "question": question,
             "conversation_history": conversation_context if conversation_context else "No previous conversation."
         })
-        return {"text": text, "chart": chart_fig}
+        return {"text": text, "chart_data": chart_data}
 
 def process_question(question: str):
     """Process a question and update chat history"""
@@ -574,11 +564,11 @@ def process_question(question: str):
     # Generate response
     response = generate_response(question)
     
-    # Add assistant response to display (store both text and chart)
+    # Add assistant response to display (store both text and chart data)
     st.session_state.messages.append({
         "role": "assistant", 
         "content": response["text"],
-        "chart": response.get("chart")
+        "chart_data": response.get("chart_data")
     })
     
     # Add to conversation history (session memory) — text only
@@ -645,9 +635,15 @@ st.divider()
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        # Render chart if present
-        if message.get("chart") is not None:
-            st.plotly_chart(message["chart"], use_container_width=True)
+        # Recreate and render chart from stored data if present
+        if message.get("chart_data") is not None:
+            try:
+                cd = message["chart_data"]
+                fig = create_trend_chart(cd["trend_data"], cd["question"])
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+            except Exception:
+                pass
 
 # ============================================================
 # CHAT INPUT
@@ -662,20 +658,26 @@ if prompt := st.chat_input("Ask me anything about Minimum Wage Risk..."):
         with st.spinner("🔍 Analyzing..."):
             response = generate_response(prompt)
             st.markdown(response["text"])
-            # Show chart debug info (remove after testing)
-            if st.session_state.get("_chart_debug"):
-                with st.expander("📊 Chart Debug Info"):
-                    for line in st.session_state["_chart_debug"]:
-                        st.write(line)
-            if response.get("chart") is not None:
-                st.plotly_chart(response["chart"], use_container_width=True)
+            # Show debug info (remove after testing)
+            debug = st.session_state.get("_chart_debug", "")
+            if debug:
+                st.caption(f"🔧 Debug: {debug}")
+            # Render chart if data present
+            if response.get("chart_data") is not None:
+                try:
+                    cd = response["chart_data"]
+                    fig = create_trend_chart(cd["trend_data"], cd["question"])
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Chart error: {e}")
     
     # Update session state
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.messages.append({
         "role": "assistant", 
         "content": response["text"],
-        "chart": response.get("chart")
+        "chart_data": response.get("chart_data")
     })
     st.session_state.conversation_history.append({"role": "user", "content": prompt})
     st.session_state.conversation_history.append({"role": "assistant", "content": response["text"]})
