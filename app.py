@@ -374,8 +374,13 @@ Return ONLY the Cypher query, nothing else."""),
     return results[:8]
 
 def fetch_ranked_data(question: str) -> list:
-    """Fetch ranked data using hardcoded proven Cypher queries.
-    Pattern-matches the question to select the right query."""
+    """HYBRID approach: LLM generates Cypher first, validated, with hardcoded fallback.
+    
+    Flow:
+    1. LLM generates a ranking Cypher query (dynamic — handles any question)
+    2. Validate results: must have 'label' + 'value', non-empty, correct types
+    3. If validation fails → fall back to closest hardcoded proven query
+    """
     
     q_lower = question.lower()
     
@@ -386,76 +391,189 @@ def fetch_ranked_data(question: str) -> list:
     if limit > 15:
         limit = 15
     
-    # Select the right query based on question content
-    if any(kw in q_lower for kw in ['risk state', 'risk states', 'riskiest state', 'highest risk state']):
-        cypher = f"""
-        MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
-        WITH z.state AS st, avg(z.newRiskScorePct) AS value
-        MATCH (s:State {{abbr: st}})
-        RETURN s.name AS label, value,
-          CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
-               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
-        ORDER BY value DESC LIMIT {limit}
-        """
+    # ------------------------------------------------------------------
+    # STEP 1: TRY LLM-GENERATED CYPHER FIRST
+    # ------------------------------------------------------------------
+    llm_results = _try_llm_ranked_query(question, limit)
+    if llm_results:
+        st.session_state["_rank_debug"] = f"LLM OK: {len(llm_results)} items"
+        return llm_results[:limit]
     
-    elif any(kw in q_lower for kw in ['lowest risk', 'safest state', 'least risk']):
-        cypher = f"""
-        MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
-        WITH z.state AS st, avg(z.newRiskScorePct) AS value
-        MATCH (s:State {{abbr: st}})
-        RETURN s.name AS label, value,
-          CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
-               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
-        ORDER BY value ASC LIMIT {limit}
-        """
+    # ------------------------------------------------------------------
+    # STEP 2: FALLBACK TO HARDCODED PROVEN QUERIES
+    # ------------------------------------------------------------------
+    st.session_state["_rank_debug"] = "LLM failed → using fallback"
+    return _fallback_ranked_query(question, limit)
+
+
+def _try_llm_ranked_query(question: str, limit: int) -> list:
+    """Attempt to generate and execute a ranking query via LLM.
+    Returns validated results or empty list if anything fails."""
     
-    elif any(kw in q_lower for kw in ['risk count', 'risk counties', 'riskiest count', 'highest risk count']):
-        cypher = f"""
-        MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
-        WITH z.county + ', ' + z.state AS label, avg(z.newRiskScorePct) AS value
-        RETURN label, value,
-          CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
-               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
-        ORDER BY value DESC LIMIT {limit}
-        """
+    rank_cypher_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a Neo4j Cypher expert for the MWR (Minimum Wage Risk) database.
+Generate a Cypher query that returns RANKED data for charting.
+
+DATABASE STRUCTURE:
+- ZipCode nodes have: newRiskScorePct (0-100 risk score), county, state (abbreviation), 
+  cost_of_labor (ERI index, 100=national avg), cost_of_living (ERI index), 
+  unemployment_rate, median_household_income, workforce_population,
+  pct_bachelors, pct_graduate, pct_no_diploma, total_population
+- State nodes have: name (full name), abbr (2-letter abbreviation)
+- Relationships: (ZipCode)-[:IN_STATE]->(State)
+
+CRITICAL OUTPUT FORMAT — YOUR QUERY MUST RETURN EXACTLY THESE ALIASES:
+- label: (string) The name to display on the chart (state name, "county, ST", etc.)
+- value: (number) The numeric value to rank by
+- tier:  (string or null) Risk tier if applicable — use this CASE expression for risk queries:
+         CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
+              WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END
+
+QUERY PATTERNS:
+- State-level rankings: Aggregate ZipCode by z.state, JOIN to State node for full name
+  MATCH (z:ZipCode) WHERE z.[field] IS NOT NULL
+  WITH z.state AS st, avg(z.[field]) AS value
+  MATCH (s:State {{abbr: st}})
+  RETURN s.name AS label, value, [tier or null] AS tier
+  ORDER BY value DESC/ASC LIMIT N
+
+- County-level rankings: Aggregate ZipCode by county+state
+  MATCH (z:ZipCode) WHERE z.[field] IS NOT NULL
+  WITH z.county + ', ' + z.state AS label, avg(z.[field]) AS value
+  RETURN label, value, [tier or null] AS tier
+  ORDER BY value DESC/ASC LIMIT N
+
+FIELD MAPPING:
+- "risk", "riskiest", "highest risk" → use newRiskScorePct, include tier
+- "cost of labor", "expensive labor", "labor cost" → use cost_of_labor, tier = null
+- "cost of living", "expensive living" → use cost_of_living, tier = null  
+- "unemployment", "jobless" → use unemployment_rate, tier = null
+- "income", "wealthy", "richest" → use median_household_income, tier = null
+- "population", "largest" → use total_population, tier = null
+- "educated", "education" → use pct_bachelors, tier = null
+- "workforce" → use workforce_population, tier = null
+
+SORTING:
+- "top", "highest", "most expensive", "riskiest" → ORDER BY value DESC
+- "lowest", "cheapest", "safest", "least" → ORDER BY value ASC
+
+Return ONLY the Cypher query. No explanations, no markdown."""),
+        ("human", "Question: {question}\nLimit: {limit}")
+    ])
     
-    elif any(kw in q_lower for kw in ['expensive', 'highest cost of labor', 'most costly labor', 'labor cost rank', 'labor ranking']):
-        cypher = f"""
-        MATCH (z:ZipCode) WHERE z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0
-        WITH z.state AS st, avg(z.cost_of_labor) AS value
-        MATCH (s:State {{abbr: st}})
-        RETURN s.name AS label, value, null AS tier
-        ORDER BY value DESC LIMIT {limit}
-        """
+    chain = rank_cypher_prompt | st.session_state.llm | StrOutputParser()
     
-    elif any(kw in q_lower for kw in ['cost of living rank', 'expensive living', 'highest cost of living', 'living cost rank']):
-        cypher = f"""
-        MATCH (z:ZipCode) WHERE z.cost_of_living IS NOT NULL AND z.cost_of_living > 0
-        WITH z.state AS st, avg(z.cost_of_living) AS value
-        MATCH (s:State {{abbr: st}})
-        RETURN s.name AS label, value, null AS tier
-        ORDER BY value DESC LIMIT {limit}
-        """
+    try:
+        cypher = chain.invoke({"question": question, "limit": str(limit)}).strip()
+        cypher = cypher.replace("```cypher", "").replace("```", "").strip()
+    except Exception as e:
+        st.session_state["_rank_debug"] = f"LLM prompt error: {str(e)[:100]}"
+        return []
     
-    elif any(kw in q_lower for kw in ['cheapest', 'lowest cost of labor', 'least expensive labor']):
+    st.session_state["_rank_cypher"] = cypher[:300]
+    
+    # Execute
+    try:
+        driver = st.session_state.graph_rag.driver
+        with driver.session() as session:
+            records = [dict(r) for r in session.run(cypher)]
+    except Exception as e:
+        st.session_state["_rank_debug"] = f"LLM Cypher exec error: {str(e)[:100]}"
+        return []
+    
+    # ------------------------------------------------------------------
+    # VALIDATE: must have 'label' and 'value', at least 1 record
+    # ------------------------------------------------------------------
+    if not records:
+        return []
+    
+    validated = []
+    for r in records:
+        label = r.get("label")
+        value = r.get("value")
+        if label is not None and value is not None:
+            try:
+                validated.append({
+                    "label": str(label),
+                    "value": round(float(value), 1),
+                    "tier": r.get("tier")
+                })
+            except (ValueError, TypeError):
+                continue
+    
+    # Need at least 2 items for a meaningful ranking chart
+    if len(validated) < 2:
+        return []
+    
+    return validated
+
+
+def _fallback_ranked_query(question: str, limit: int) -> list:
+    """Hardcoded proven queries — guaranteed to work. Used when LLM fails."""
+    
+    q_lower = question.lower()
+    
+    # Determine sort direction
+    is_ascending = any(kw in q_lower for kw in ['lowest', 'safest', 'least', 'cheapest', 'bottom'])
+    order = "ASC" if is_ascending else "DESC"
+    
+    # Select the right query
+    if any(kw in q_lower for kw in ['county', 'counties']):
+        # County-level ranking
+        if any(kw in q_lower for kw in ['labor', 'cost of labor', 'expensive labor']):
+            field, tier_expr = "cost_of_labor", "null"
+            where = "z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0"
+        elif any(kw in q_lower for kw in ['living', 'cost of living']):
+            field, tier_expr = "cost_of_living", "null"
+            where = "z.cost_of_living IS NOT NULL AND z.cost_of_living > 0"
+        elif any(kw in q_lower for kw in ['unemployment', 'jobless']):
+            field, tier_expr = "unemployment_rate", "null"
+            where = "z.unemployment_rate IS NOT NULL"
+        else:
+            field = "newRiskScorePct"
+            tier_expr = """CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
+                          WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END"""
+            where = "z.newRiskScorePct IS NOT NULL"
+        
         cypher = f"""
-        MATCH (z:ZipCode) WHERE z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0
-        WITH z.state AS st, avg(z.cost_of_labor) AS value
-        MATCH (s:State {{abbr: st}})
-        RETURN s.name AS label, value, null AS tier
-        ORDER BY value ASC LIMIT {limit}
+        MATCH (z:ZipCode) WHERE {where}
+        WITH z.county + ', ' + z.state AS label, avg(z.{field}) AS value
+        RETURN label, value, {tier_expr} AS tier
+        ORDER BY value {order} LIMIT {limit}
         """
     
     else:
-        # Default: top risk states
+        # State-level ranking
+        if any(kw in q_lower for kw in ['labor', 'cost of labor', 'expensive labor']):
+            field, tier_expr = "cost_of_labor", "null"
+            where = "z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0"
+        elif any(kw in q_lower for kw in ['living', 'cost of living']):
+            field, tier_expr = "cost_of_living", "null"
+            where = "z.cost_of_living IS NOT NULL AND z.cost_of_living > 0"
+        elif any(kw in q_lower for kw in ['unemployment', 'jobless']):
+            field, tier_expr = "unemployment_rate", "null"
+            where = "z.unemployment_rate IS NOT NULL"
+        elif any(kw in q_lower for kw in ['income', 'wealthy', 'richest']):
+            field, tier_expr = "median_household_income", "null"
+            where = "z.median_household_income IS NOT NULL"
+        elif any(kw in q_lower for kw in ['population', 'largest', 'biggest']):
+            field, tier_expr = "total_population", "null"
+            where = "z.total_population IS NOT NULL"
+        elif any(kw in q_lower for kw in ['educated', 'education', 'college', 'bachelor']):
+            field, tier_expr = "pct_bachelors", "null"
+            where = "z.pct_bachelors IS NOT NULL"
+        else:
+            field = "newRiskScorePct"
+            tier_expr = """CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
+                          WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END"""
+            where = "z.newRiskScorePct IS NOT NULL"
+        
         cypher = f"""
-        MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
-        WITH z.state AS st, avg(z.newRiskScorePct) AS value
+        MATCH (z:ZipCode) WHERE {where}
+        WITH z.state AS st, avg(z.{field}) AS value
         MATCH (s:State {{abbr: st}})
-        RETURN s.name AS label, value,
-          CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
-               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
-        ORDER BY value DESC LIMIT {limit}
+        RETURN s.name AS label, value, {tier_expr} AS tier
+        ORDER BY value {order} LIMIT {limit}
         """
     
     st.session_state["_rank_cypher"] = cypher.strip()[:300]
@@ -465,16 +583,14 @@ def fetch_ranked_data(question: str) -> list:
         with driver.session() as session:
             records = [dict(r) for r in session.run(cypher)]
     except Exception as e:
-        st.session_state["_rank_debug"] = f"Neo4j error: {str(e)[:200]}"
+        st.session_state["_rank_debug"] = f"Fallback error: {str(e)[:200]}"
         return []
-    
-    st.session_state["_rank_debug"] = f"Records: {len(records)}"
     
     results = []
     for r in records:
         if r.get("label") is not None and r.get("value") is not None:
             results.append({"label": str(r["label"]), "value": round(float(r["value"]), 1), "tier": r.get("tier")})
-    return results[:15]
+    return results[:limit]
 
 
 # ============================================================
@@ -880,11 +996,6 @@ st.divider()
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        # Show if chart_data exists for debugging
-        if message["role"] == "assistant":
-            has_chart = message.get("chart_data") is not None
-            debug_msg = st.session_state.get("_chart_debug", "N/A")
-            st.caption(f"🔧 chart_data: {has_chart} | {debug_msg}")
         # Recreate and render chart from stored data if present
         if message.get("chart_data") is not None:
             try:
@@ -979,3 +1090,12 @@ with st.sidebar:
         st.session_state.conversation_history = []
         st.session_state.pending_question = None
         st.rerun()
+    
+    # Developer debug (hidden from main chat)
+    st.divider()
+    st.markdown("**🔧 Debug (dev only)**")
+    st.caption(st.session_state.get("_chart_debug", "—"))
+    st.caption(st.session_state.get("_rank_debug", "—"))
+    rank_cypher = st.session_state.get("_rank_cypher", "")
+    if rank_cypher:
+        st.code(rank_cypher[:200], language="cypher")
