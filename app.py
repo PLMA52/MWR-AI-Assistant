@@ -450,7 +450,10 @@ FIELD MAPPING:
 - "unemployment", "jobless" → use unemployment_rate, tier = null
 - "income", "wealthy", "richest" → use median_household_income, tier = null
 - "population", "largest" → use total_population, tier = null
-- "educated", "education" → use pct_bachelors, tier = null
+- "educated", "education", "college", "degree" → use (z.pct_bachelors + z.pct_graduate) as COMBINED college-educated %, tier = null
+  IMPORTANT: For education rankings, always compute the value as avg(z.pct_bachelors + z.pct_graduate).
+  Example: WITH z.county + ', ' + z.state AS label, avg(z.pct_bachelors + z.pct_graduate) AS value
+- "no diploma", "least educated", "uneducated" → use pct_no_diploma, tier = null
 - "workforce" → use workforce_population, tier = null
 
 SORTING:
@@ -520,61 +523,99 @@ def _fallback_ranked_query(question: str, limit: int) -> list:
     # Select the right query
     if any(kw in q_lower for kw in ['county', 'counties']):
         # County-level ranking
-        if any(kw in q_lower for kw in ['labor', 'cost of labor', 'expensive labor']):
-            field, tier_expr = "cost_of_labor", "null"
-            where = "z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0"
-        elif any(kw in q_lower for kw in ['living', 'cost of living']):
-            field, tier_expr = "cost_of_living", "null"
-            where = "z.cost_of_living IS NOT NULL AND z.cost_of_living > 0"
-        elif any(kw in q_lower for kw in ['unemployment', 'jobless']):
-            field, tier_expr = "unemployment_rate", "null"
-            where = "z.unemployment_rate IS NOT NULL"
-        else:
-            field = "newRiskScorePct"
-            tier_expr = """CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
-                          WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END"""
-            where = "z.newRiskScorePct IS NOT NULL"
+        is_education = any(kw in q_lower for kw in ['educated', 'education', 'college', 'bachelor', 'degree'])
+        is_no_diploma = any(kw in q_lower for kw in ['no diploma', 'uneducated', 'least educated', 'dropout'])
         
-        cypher = f"""
-        MATCH (z:ZipCode) WHERE {where}
-        WITH z.county + ', ' + z.state AS label, avg(z.{field}) AS value
-        RETURN label, value, {tier_expr} AS tier
-        ORDER BY value {order} LIMIT {limit}
-        """
+        if is_education or is_no_diploma:
+            # Education needs special Cypher — combined field or pct_no_diploma
+            if is_no_diploma:
+                cypher = f"""
+                MATCH (z:ZipCode) WHERE z.pct_no_diploma IS NOT NULL
+                WITH z.county + ', ' + z.state AS label, avg(z.pct_no_diploma) AS value
+                RETURN label, value, null AS tier
+                ORDER BY value {order} LIMIT {limit}
+                """
+            else:
+                cypher = f"""
+                MATCH (z:ZipCode) WHERE z.pct_bachelors IS NOT NULL AND z.pct_graduate IS NOT NULL
+                WITH z.county + ', ' + z.state AS label, avg(z.pct_bachelors + z.pct_graduate) AS value
+                RETURN label, value, null AS tier
+                ORDER BY value {order} LIMIT {limit}
+                """
+        else:
+            if any(kw in q_lower for kw in ['labor', 'cost of labor', 'expensive labor']):
+                field, tier_expr = "cost_of_labor", "null"
+                where = "z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0"
+            elif any(kw in q_lower for kw in ['living', 'cost of living']):
+                field, tier_expr = "cost_of_living", "null"
+                where = "z.cost_of_living IS NOT NULL AND z.cost_of_living > 0"
+            elif any(kw in q_lower for kw in ['unemployment', 'jobless']):
+                field, tier_expr = "unemployment_rate", "null"
+                where = "z.unemployment_rate IS NOT NULL"
+            else:
+                field = "newRiskScorePct"
+                tier_expr = """CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
+                              WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END"""
+                where = "z.newRiskScorePct IS NOT NULL"
+            
+            cypher = f"""
+            MATCH (z:ZipCode) WHERE {where}
+            WITH z.county + ', ' + z.state AS label, avg(z.{field}) AS value
+            RETURN label, value, {tier_expr} AS tier
+            ORDER BY value {order} LIMIT {limit}
+            """
     
     else:
         # State-level ranking
-        if any(kw in q_lower for kw in ['labor', 'cost of labor', 'expensive labor']):
-            field, tier_expr = "cost_of_labor", "null"
-            where = "z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0"
-        elif any(kw in q_lower for kw in ['living', 'cost of living']):
-            field, tier_expr = "cost_of_living", "null"
-            where = "z.cost_of_living IS NOT NULL AND z.cost_of_living > 0"
-        elif any(kw in q_lower for kw in ['unemployment', 'jobless']):
-            field, tier_expr = "unemployment_rate", "null"
-            where = "z.unemployment_rate IS NOT NULL"
-        elif any(kw in q_lower for kw in ['income', 'wealthy', 'richest']):
-            field, tier_expr = "median_household_income", "null"
-            where = "z.median_household_income IS NOT NULL"
-        elif any(kw in q_lower for kw in ['population', 'largest', 'biggest']):
-            field, tier_expr = "total_population", "null"
-            where = "z.total_population IS NOT NULL"
-        elif any(kw in q_lower for kw in ['educated', 'education', 'college', 'bachelor']):
-            field, tier_expr = "pct_bachelors", "null"
-            where = "z.pct_bachelors IS NOT NULL"
-        else:
-            field = "newRiskScorePct"
-            tier_expr = """CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
-                          WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END"""
-            where = "z.newRiskScorePct IS NOT NULL"
+        is_education = any(kw in q_lower for kw in ['educated', 'education', 'college', 'bachelor', 'degree'])
+        is_no_diploma = any(kw in q_lower for kw in ['no diploma', 'uneducated', 'least educated', 'dropout'])
         
-        cypher = f"""
-        MATCH (z:ZipCode) WHERE {where}
-        WITH z.state AS st, avg(z.{field}) AS value
-        MATCH (s:State {{abbr: st}})
-        RETURN s.name AS label, value, {tier_expr} AS tier
-        ORDER BY value {order} LIMIT {limit}
-        """
+        if is_education or is_no_diploma:
+            if is_no_diploma:
+                cypher = f"""
+                MATCH (z:ZipCode) WHERE z.pct_no_diploma IS NOT NULL
+                WITH z.state AS st, avg(z.pct_no_diploma) AS value
+                MATCH (s:State {{abbr: st}})
+                RETURN s.name AS label, value, null AS tier
+                ORDER BY value {order} LIMIT {limit}
+                """
+            else:
+                cypher = f"""
+                MATCH (z:ZipCode) WHERE z.pct_bachelors IS NOT NULL AND z.pct_graduate IS NOT NULL
+                WITH z.state AS st, avg(z.pct_bachelors + z.pct_graduate) AS value
+                MATCH (s:State {{abbr: st}})
+                RETURN s.name AS label, value, null AS tier
+                ORDER BY value {order} LIMIT {limit}
+                """
+        else:
+            if any(kw in q_lower for kw in ['labor', 'cost of labor', 'expensive labor']):
+                field, tier_expr = "cost_of_labor", "null"
+                where = "z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0"
+            elif any(kw in q_lower for kw in ['living', 'cost of living']):
+                field, tier_expr = "cost_of_living", "null"
+                where = "z.cost_of_living IS NOT NULL AND z.cost_of_living > 0"
+            elif any(kw in q_lower for kw in ['unemployment', 'jobless']):
+                field, tier_expr = "unemployment_rate", "null"
+                where = "z.unemployment_rate IS NOT NULL"
+            elif any(kw in q_lower for kw in ['income', 'wealthy', 'richest']):
+                field, tier_expr = "median_household_income", "null"
+                where = "z.median_household_income IS NOT NULL"
+            elif any(kw in q_lower for kw in ['population', 'largest', 'biggest']):
+                field, tier_expr = "total_population", "null"
+                where = "z.total_population IS NOT NULL"
+            else:
+                field = "newRiskScorePct"
+                tier_expr = """CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
+                              WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END"""
+                where = "z.newRiskScorePct IS NOT NULL"
+            
+            cypher = f"""
+            MATCH (z:ZipCode) WHERE {where}
+            WITH z.state AS st, avg(z.{field}) AS value
+            MATCH (s:State {{abbr: st}})
+            RETURN s.name AS label, value, {tier_expr} AS tier
+            ORDER BY value {order} LIMIT {limit}
+            """
     
     st.session_state["_rank_cypher"] = cypher.strip()[:300]
     
@@ -738,17 +779,32 @@ def create_hbar_chart(ranked_data: list, question: str) -> go.Figure:
         hovertemplate='<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>'))
     
     q_lower = question.lower()
+    is_county = ('county' in q_lower or 'counties' in q_lower)
+    geo = "Counties" if is_county else "States"
+    
     if 'risk' in q_lower or 'score' in q_lower:
-        title = "Counties by Average Risk Score (%)" if ('county' in q_lower or 'counties' in q_lower) else "States by Average Risk Score (%)"
+        title = f"{geo} by Average Risk Score (%)"
         x_label = "Risk Score (%)"
     elif 'labor' in q_lower:
-        title, x_label = "Cost of Labor Rankings", "ERI Index (100 = National Avg)"
+        title, x_label = f"{geo} by Cost of Labor", "ERI Index (100 = National Avg)"
     elif 'living' in q_lower:
-        title, x_label = "Cost of Living Rankings", "ERI Index (100 = National Avg)"
+        title, x_label = f"{geo} by Cost of Living", "ERI Index (100 = National Avg)"
     elif 'expensive' in q_lower:
-        title, x_label = "Most Expensive Markets", "ERI Index (100 = National Avg)"
+        title, x_label = f"Most Expensive {geo}", "ERI Index (100 = National Avg)"
+    elif any(kw in q_lower for kw in ['unemployment', 'jobless']):
+        title, x_label = f"{geo} by Unemployment Rate", "Unemployment Rate (%)"
+    elif any(kw in q_lower for kw in ['educated', 'education', 'college', 'bachelor', 'degree']):
+        title, x_label = f"{geo} by College Education Rate", "College-Educated (%)"
+    elif any(kw in q_lower for kw in ['no diploma', 'uneducated', 'dropout']):
+        title, x_label = f"{geo} by No Diploma Rate", "No Diploma (%)"
+    elif any(kw in q_lower for kw in ['income', 'wealthy', 'richest']):
+        title, x_label = f"{geo} by Median Household Income", "Median Income ($)"
+    elif any(kw in q_lower for kw in ['population', 'largest', 'biggest']):
+        title, x_label = f"{geo} by Population", "Population"
+    elif any(kw in q_lower for kw in ['workforce']):
+        title, x_label = f"{geo} by Workforce Population", "Workforce (18-64)"
     else:
-        title, x_label = "Rankings", "Value"
+        title, x_label = f"{geo} Rankings", "Value"
     
     chart_height = max(400, len(ranked_data) * 40 + 120)
     
@@ -767,6 +823,14 @@ def create_hbar_chart(ranked_data: list, question: str) -> go.Figure:
         fig.add_vline(x=100, line_dash="dash", line_color="#E74C3C", line_width=1.5,
             annotation_text="National Avg (100)", annotation_position="top",
             annotation_font=dict(color="#E74C3C", size=10))
+    elif any(kw in q_lower for kw in ['unemployment', 'jobless']):
+        fig.add_vline(x=4.0, line_dash="dash", line_color="#F39C12", line_width=1.5,
+            annotation_text="Healthy (4%)", annotation_position="top",
+            annotation_font=dict(color="#F39C12", size=10))
+    elif any(kw in q_lower for kw in ['educated', 'education', 'college', 'bachelor', 'degree']):
+        fig.add_vline(x=33, line_dash="dash", line_color="#3498DB", line_width=1.5,
+            annotation_text="National Avg (~33%)", annotation_position="top",
+            annotation_font=dict(color="#3498DB", size=10))
     
     return fig
 
