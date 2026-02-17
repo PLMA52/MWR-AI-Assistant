@@ -374,82 +374,91 @@ Return ONLY the Cypher query, nothing else."""),
     return results[:8]
 
 def fetch_ranked_data(question: str) -> list:
-    """Fetch ranked data from Neo4j for horizontal bar charts"""
-    cypher_prompt = ChatPromptTemplate.from_messages([
-        ("system", """Generate a Neo4j Cypher query to fetch ranked data for a horizontal bar chart.
-
-CRITICAL — Use ONLY these exact property names (case-sensitive!):
-
-ZipCode node properties:
-- newRiskScorePct: risk score as percentage (0-100)
-- newRiskTier: 'Critical', 'High', 'Elevated', 'Moderate', or 'Low'
-- cost_of_labor: ERI labor cost index (100 = national average)
-- cost_of_living: ERI living cost index (100 = national average)
-- county: county name
-- state: 2-letter state abbreviation (e.g., 'CA', 'NY')
-
-State node properties (ONLY these two exist):
-- name: full state name (e.g., 'New York')
-- abbr: 2-letter abbreviation (e.g., 'NY')
-
-RULES:
-1. State nodes do NOT have risk scores. To rank states, aggregate ZipCode data.
-2. Always return exactly 3 columns: label, value, tier
-3. Use LIMIT (default 10, or what user asks)
-4. ORDER BY value DESC for "top/highest/most", ASC for "bottom/lowest/least"
-
-EXACT QUERY PATTERNS — copy these exactly, just change LIMIT:
-
-"top N risk states" or "highest risk states":
-MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
-WITH z.state AS st, avg(z.newRiskScorePct) AS value
-MATCH (s:State {abbr: st})
-RETURN s.name AS label, value,
-  CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
-ORDER BY value DESC LIMIT 10
-
-"highest risk counties" or "top risk counties":
-MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
-WITH z.county + ', ' + z.state AS label, avg(z.newRiskScorePct) AS value
-RETURN label, value,
-  CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
-ORDER BY value DESC LIMIT 10
-
-"most expensive states for labor":
-MATCH (z:ZipCode) WHERE z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0
-WITH z.state AS st, avg(z.cost_of_labor) AS value
-MATCH (s:State {abbr: st})
-RETURN s.name AS label, value, null AS tier
-ORDER BY value DESC LIMIT 10
-
-"most expensive states for living" or "highest cost of living":
-MATCH (z:ZipCode) WHERE z.cost_of_living IS NOT NULL AND z.cost_of_living > 0
-WITH z.state AS st, avg(z.cost_of_living) AS value
-MATCH (s:State {abbr: st})
-RETURN s.name AS label, value, null AS tier
-ORDER BY value DESC LIMIT 10
-
-"lowest risk states" or "safest states":
-MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
-WITH z.state AS st, avg(z.newRiskScorePct) AS value
-MATCH (s:State {abbr: st})
-RETURN s.name AS label, value,
-  CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
-ORDER BY value ASC LIMIT 10
-
-Return ONLY the Cypher query, nothing else."""),
-        ("human", "{question}")
-    ])
+    """Fetch ranked data using hardcoded proven Cypher queries.
+    Pattern-matches the question to select the right query."""
     
-    chain = cypher_prompt | st.session_state.llm | StrOutputParser()
-    try:
-        cypher = chain.invoke({"question": question}).strip().replace("```cypher", "").replace("```", "").strip()
-    except Exception as e:
-        st.session_state["_rank_debug"] = f"LLM error: {e}"
-        return []
+    q_lower = question.lower()
     
-    # Store the generated Cypher for debugging
-    st.session_state["_rank_cypher"] = cypher[:300]
+    # Determine limit from question (default 10)
+    import re as _re
+    limit_match = _re.search(r'top\s+(\d+)', q_lower)
+    limit = int(limit_match.group(1)) if limit_match else 10
+    if limit > 15:
+        limit = 15
+    
+    # Select the right query based on question content
+    if any(kw in q_lower for kw in ['risk state', 'risk states', 'riskiest state', 'highest risk state']):
+        cypher = f"""
+        MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
+        WITH z.state AS st, avg(z.newRiskScorePct) AS value
+        MATCH (s:State {{abbr: st}})
+        RETURN s.name AS label, value,
+          CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
+               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
+        ORDER BY value DESC LIMIT {limit}
+        """
+    
+    elif any(kw in q_lower for kw in ['lowest risk', 'safest state', 'least risk']):
+        cypher = f"""
+        MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
+        WITH z.state AS st, avg(z.newRiskScorePct) AS value
+        MATCH (s:State {{abbr: st}})
+        RETURN s.name AS label, value,
+          CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
+               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
+        ORDER BY value ASC LIMIT {limit}
+        """
+    
+    elif any(kw in q_lower for kw in ['risk count', 'risk counties', 'riskiest count', 'highest risk count']):
+        cypher = f"""
+        MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
+        WITH z.county + ', ' + z.state AS label, avg(z.newRiskScorePct) AS value
+        RETURN label, value,
+          CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
+               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
+        ORDER BY value DESC LIMIT {limit}
+        """
+    
+    elif any(kw in q_lower for kw in ['expensive', 'highest cost of labor', 'most costly labor', 'labor cost rank', 'labor ranking']):
+        cypher = f"""
+        MATCH (z:ZipCode) WHERE z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0
+        WITH z.state AS st, avg(z.cost_of_labor) AS value
+        MATCH (s:State {{abbr: st}})
+        RETURN s.name AS label, value, null AS tier
+        ORDER BY value DESC LIMIT {limit}
+        """
+    
+    elif any(kw in q_lower for kw in ['cost of living rank', 'expensive living', 'highest cost of living', 'living cost rank']):
+        cypher = f"""
+        MATCH (z:ZipCode) WHERE z.cost_of_living IS NOT NULL AND z.cost_of_living > 0
+        WITH z.state AS st, avg(z.cost_of_living) AS value
+        MATCH (s:State {{abbr: st}})
+        RETURN s.name AS label, value, null AS tier
+        ORDER BY value DESC LIMIT {limit}
+        """
+    
+    elif any(kw in q_lower for kw in ['cheapest', 'lowest cost of labor', 'least expensive labor']):
+        cypher = f"""
+        MATCH (z:ZipCode) WHERE z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0
+        WITH z.state AS st, avg(z.cost_of_labor) AS value
+        MATCH (s:State {{abbr: st}})
+        RETURN s.name AS label, value, null AS tier
+        ORDER BY value ASC LIMIT {limit}
+        """
+    
+    else:
+        # Default: top risk states
+        cypher = f"""
+        MATCH (z:ZipCode) WHERE z.newRiskScorePct IS NOT NULL
+        WITH z.state AS st, avg(z.newRiskScorePct) AS value
+        MATCH (s:State {{abbr: st}})
+        RETURN s.name AS label, value,
+          CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
+               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
+        ORDER BY value DESC LIMIT {limit}
+        """
+    
+    st.session_state["_rank_cypher"] = cypher.strip()[:300]
     
     try:
         driver = st.session_state.graph_rag.driver
@@ -466,6 +475,7 @@ Return ONLY the Cypher query, nothing else."""),
         if r.get("label") is not None and r.get("value") is not None:
             results.append({"label": str(r["label"]), "value": round(float(r["value"]), 1), "tier": r.get("tier")})
     return results[:15]
+
 
 # ============================================================
 # CHART CREATION FUNCTIONS
