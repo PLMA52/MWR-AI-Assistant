@@ -421,29 +421,31 @@ def create_trend_chart(trend_data: list, question: str) -> go.Figure:
             title = "ERI Cost Trends Comparison"
     
     fig.update_layout(
-        title=dict(text=title, font=dict(size=18, color='#1B4F5C')),
-        xaxis_title="Period",
+        title=dict(text=title, font=dict(size=20, color='#1B4F5C', family='Arial')),
+        xaxis_title="",
         yaxis_title="ERI Index (100 = National Average)",
         hovermode='x unified',
         template='plotly_white',
-        height=450,
+        height=500,
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=-0.3,
             xanchor="center",
-            x=0.5
+            x=0.5,
+            font=dict(size=12)
         ),
-        margin=dict(l=60, r=30, t=60, b=80),
-        yaxis=dict(gridcolor='#E8E8E8'),
-        xaxis=dict(gridcolor='#E8E8E8', tickangle=-45)
+        margin=dict(l=60, r=30, t=70, b=80),
+        yaxis=dict(gridcolor='#E8E8E8', tickfont=dict(size=11)),
+        xaxis=dict(gridcolor='#E8E8E8', tickangle=-45, tickfont=dict(size=11)),
+        plot_bgcolor='white'
     )
     
     # Add reference line at 100 (national average)
     fig.add_hline(
-        y=100, line_dash="dot", line_color="#999999", line_width=1,
+        y=100, line_dash="dash", line_color="#E74C3C", line_width=1.5,
         annotation_text="National Avg (100)", annotation_position="bottom right",
-        annotation_font_color="#999999"
+        annotation_font=dict(color="#E74C3C", size=11)
     )
     
     return fig
@@ -473,47 +475,59 @@ def create_bar_chart(trend_data: list, question: str) -> go.Figure:
         fig.add_trace(go.Bar(
             x=labels, y=labor_values,
             name="Cost of Labor",
-            marker_color=CHART_COLORS[0],
+            marker_color=[CHART_COLORS[i % len(CHART_COLORS)] for i in range(len(labels))] if metric_type == "labor" else [CHART_COLORS[0]] * len(labels),
             text=[f"{v:.1f}" for v in labor_values],
             textposition='outside',
-            hovertemplate='%{x}<br>Cost of Labor: %{y:.1f}<extra></extra>'
+            textfont=dict(size=14, color='#333333', family='Arial Black'),
+            hovertemplate='<b>%{x}</b><br>Cost of Labor: %{y:.1f}<br>vs National Avg: %{customdata:+.1f}<extra></extra>',
+            customdata=[v - 100 for v in labor_values]
         ))
     
     if metric_type in ["living", "both"]:
         fig.add_trace(go.Bar(
             x=labels, y=living_values,
             name="Cost of Living",
-            marker_color=CHART_COLORS[1],
+            marker_color=[CHART_COLORS[i + 1 % len(CHART_COLORS)] for i in range(len(labels))] if metric_type == "living" else [CHART_COLORS[1]] * len(labels),
             text=[f"{v:.1f}" for v in living_values],
             textposition='outside',
-            hovertemplate='%{x}<br>Cost of Living: %{y:.1f}<extra></extra>'
+            textfont=dict(size=14, color='#333333', family='Arial Black'),
+            hovertemplate='<b>%{x}</b><br>Cost of Living: %{y:.1f}<br>vs National Avg: %{customdata:+.1f}<extra></extra>',
+            customdata=[v - 100 for v in living_values]
         ))
     
     # Determine title
     if metric_type == "labor":
-        title = "Cost of Labor Comparison (Latest Period)"
+        title = "Cost of Labor Comparison — Latest Period"
     elif metric_type == "living":
-        title = "Cost of Living Comparison (Latest Period)"
+        title = "Cost of Living Comparison — Latest Period"
     else:
-        title = "ERI Cost Comparison (Latest Period)"
+        title = "ERI Cost Comparison — Latest Period"
+    
+    # Calculate y-axis range for clean spacing above bars
+    all_vals = (labor_values if metric_type in ["labor", "both"] else []) + \
+               (living_values if metric_type in ["living", "both"] else [])
+    y_max = max(all_vals) * 1.15 if all_vals else 150
     
     fig.update_layout(
-        title=dict(text=title, font=dict(size=18, color='#1B4F5C')),
-        xaxis_title="Location",
+        title=dict(text=title, font=dict(size=20, color='#1B4F5C', family='Arial')),
+        xaxis_title="",
         yaxis_title="ERI Index (100 = National Average)",
         barmode='group',
         template='plotly_white',
-        height=450,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
-        margin=dict(l=60, r=30, t=60, b=80),
-        yaxis=dict(gridcolor='#E8E8E8')
+        height=500,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5,
+                    font=dict(size=12)),
+        margin=dict(l=60, r=30, t=70, b=60),
+        yaxis=dict(gridcolor='#E8E8E8', range=[0, y_max]),
+        xaxis=dict(tickfont=dict(size=13, color='#333333')),
+        plot_bgcolor='white'
     )
     
     # Add reference line at 100
     fig.add_hline(
-        y=100, line_dash="dot", line_color="#999999", line_width=1,
+        y=100, line_dash="dash", line_color="#E74C3C", line_width=2,
         annotation_text="National Avg (100)", annotation_position="bottom right",
-        annotation_font_color="#999999"
+        annotation_font=dict(color="#E74C3C", size=11)
     )
     
     return fig
