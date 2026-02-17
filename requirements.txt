@@ -4,3 +4,4 @@ langchain-anthropic
 langchain-core 
 tavily-python 
 python-dotenv 
+plotly 
