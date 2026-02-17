@@ -454,16 +454,19 @@ def generate_response(question: str) -> dict:
     
     # Step 2: Check if this is a trend question that needs a chart
     chart_data = None
+    chart_error = None
     if is_trend_question(resolved_question):
         try:
             trend_data = fetch_trend_data(resolved_question)
             if trend_data:
                 chart_data = {"trend_data": trend_data, "question": resolved_question}
-        except Exception:
-            pass  # Chart data fetch failed, still provide text answer
+            else:
+                chart_error = "fetch_trend_data returned empty"
+        except Exception as e:
+            chart_error = f"fetch_trend_data error: {e}"
     
-    # Store debug info temporarily
-    st.session_state["_chart_debug"] = f"is_trend={is_trend_question(resolved_question)}, data={'yes' if chart_data else 'no'}"
+    # Store debug info
+    st.session_state["_chart_debug"] = chart_error or "OK"
     
     # Step 3: Classify the resolved question
     q_type = classify_question(resolved_question)
@@ -638,7 +641,8 @@ for message in st.session_state.messages:
         # Show if chart_data exists for debugging
         if message["role"] == "assistant":
             has_chart = message.get("chart_data") is not None
-            st.caption(f"🔧 chart_data present: {has_chart}")
+            debug_msg = st.session_state.get("_chart_debug", "N/A")
+            st.caption(f"🔧 chart_data: {has_chart} | debug: {debug_msg}")
         # Recreate and render chart from stored data if present
         if message.get("chart_data") is not None:
             try:
