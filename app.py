@@ -213,7 +213,7 @@ def search_web(query: str) -> list:
         return []
 
 # ============================================================
-# PLOTLY CHART GENERATION
+# PLOTLY CHART GENERATION — INTELLIGENT CHART SYSTEM
 # ============================================================
 
 # Sodexo-friendly color palette
@@ -228,6 +228,15 @@ CHART_COLORS = [
     '#E67E22',  # Dark orange
 ]
 
+# Risk tier color mapping (matches Power BI)
+RISK_COLORS = {
+    'Critical': '#CC0000',
+    'High': '#E74C3C',
+    'Elevated': '#F39C12',
+    'Moderate': '#F1C40F',
+    'Low': '#2ECC71'
+}
+
 PERIOD_LABELS = {
     '2024-05': 'May 2024', '2024-07': 'Jul 2024', '2024-10': 'Oct 2024',
     '2024-11': 'Nov 2024', '2025-01': 'Jan 2025', '2025-02': 'Feb 2025',
@@ -236,39 +245,81 @@ PERIOD_LABELS = {
     '2026-01': 'Jan 2026'
 }
 
-def is_trend_question(question: str) -> bool:
-    """Detect if a question would benefit from a chart (trend, comparison, bar chart, etc.)"""
+def should_generate_chart(question: str) -> bool:
+    """Detect if a question would benefit from any type of chart"""
     chart_keywords = [
         'trend', 'over time', 'history', 'historical', 'changed', 'change',
-        'direction', 'compare trend', 'show trend', 'chart', 'graph', 'plot',
-        'how has', 'what happened to', 'evolve', 'movement', 'trajectory',
-        'bar chart', 'compare', 'comparison', 'versus', ' vs ', ' vs.'
+        'direction', 'show trend', 'trajectory', 'how has', 'evolve', 'movement',
+        'compare', 'comparison', 'versus', ' vs ', ' vs.', 'bar chart', 'chart', 'graph', 'plot',
+        'top', 'highest', 'lowest', 'rank', 'worst', 'best', 'most', 'least',
+        'riskiest', 'safest', 'expensive', 'cheapest'
     ]
     return any(kw in question.lower() for kw in chart_keywords)
 
-def detect_chart_type(question: str) -> str:
-    """Determine whether to show a line chart (trend) or bar chart (snapshot comparison)"""
-    bar_keywords = ['bar chart', 'bar graph', 'compare cost', 'comparing cost', 
-                    'comparison of cost', 'current cost']
-    trend_keywords = ['trend', 'over time', 'history', 'historical', 'changed',
-                      'how has', 'trajectory', 'movement', 'evolve']
+def classify_chart_type(question: str) -> str:
+    """Use LLM to intelligently determine the best chart type for a question"""
+    chart_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a data visualization expert. Classify what chart type best answers this question.
+
+Chart types:
+- LINE_TREND: Time-series questions about how something changed over time (trends, history, trajectory)
+- BAR_COMPARE: Side-by-side comparison of current values between 2-5 specific named locations
+- HBAR_RANK: Ranked list of items (top/bottom states, counties, highest/lowest risk, most expensive)
+- NONE: Question doesn't benefit from a chart (education breakdowns, general info, ZIP counts, news)
+
+Rules:
+- "top 5 risk states" → HBAR_RANK
+- "highest risk counties" → HBAR_RANK
+- "most expensive states for labor" → HBAR_RANK
+- "which states have highest cost of labor" → HBAR_RANK
+- "rank states by cost of living" → HBAR_RANK
+- "cost of labor trend in SF" → LINE_TREND
+- "how has cost changed over time" → LINE_TREND
+- "compare cost of labor NY vs MD" → BAR_COMPARE
+- "bar chart of costs in SF vs LA" → BAR_COMPARE
+- "compare cost of living in San Francisco vs Los Angeles vs San Diego" → BAR_COMPARE
+- "what is California's risk?" → NONE (single value, no chart needed)
+- "education breakdown in SF" → NONE
+- "how many critical ZIP codes" → NONE
+- "what are the latest minimum wage news" → NONE
+
+Return ONLY one word: LINE_TREND, BAR_COMPARE, HBAR_RANK, or NONE"""),
+        ("human", "{question}")
+    ])
     
+    chain = chart_prompt | st.session_state.llm | StrOutputParser()
+    try:
+        result = chain.invoke({"question": question}).strip().upper()
+        if result not in ["LINE_TREND", "BAR_COMPARE", "HBAR_RANK", "NONE"]:
+            return "NONE"
+        return result
+    except:
+        return "NONE"
+
+def detect_metric_type(question: str) -> str:
+    """Detect whether the question is about labor, living, risk, or both costs"""
     q_lower = question.lower()
-    has_bar = any(kw in q_lower for kw in bar_keywords)
-    has_trend = any(kw in q_lower for kw in trend_keywords)
+    has_labor = any(kw in q_lower for kw in ['labor', 'col ', 'cost of labor'])
+    has_living = any(kw in q_lower for kw in ['living', 'cost of living', 'coliv'])
+    has_risk = any(kw in q_lower for kw in ['risk', 'score', 'tier', 'critical', 'riskiest'])
     
-    # If explicitly asking for bar chart, or comparing without mentioning trend
-    if has_bar and not has_trend:
-        return "bar"
-    # If comparing with "vs" but no trend words, default to bar
-    if (' vs ' in q_lower or 'versus' in q_lower or 'compare' in q_lower) and not has_trend:
-        return "bar"
-    return "line"
+    if has_risk:
+        return "risk"
+    elif has_labor and not has_living:
+        return "labor"
+    elif has_living and not has_labor:
+        return "living"
+    elif has_labor and has_living:
+        return "both"
+    else:
+        return "risk"
+
+# ============================================================
+# DATA FETCHING FUNCTIONS
+# ============================================================
 
 def fetch_trend_data(question: str) -> list:
-    """Fetch ERI time-series data from Neo4j for charting.
-    Uses LLM to generate Cypher, then queries Neo4j directly."""
-    
+    """Fetch ERI time-series data from Neo4j for line charts"""
     cypher_prompt = ChatPromptTemplate.from_messages([
         ("system", """Generate a Neo4j Cypher query to fetch ERI time-series data.
 The ZipCode nodes have these properties:
@@ -283,8 +334,7 @@ CRITICAL RULES:
 2. Always include: AND z.eri_periods IS NOT NULL
 3. For a SINGLE county query, use LIMIT 1
 4. For state-level queries, return max 5 representative counties (use LIMIT 5)
-5. For comparison queries, return one row per county (LIMIT 1 per county, or use COLLECT)
-6. Return fields AS: county, state, periods, labor, living
+5. Return fields AS: county, state, periods, labor, living
 
 Examples:
 - "trend in San Francisco" → 
@@ -296,249 +346,295 @@ Examples:
   WITH DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living 
   RETURN county, state, periods, labor, living
 
-- "cost of living in Maryland" → 
-  MATCH (z:ZipCode) WHERE z.state = 'MD' AND z.eri_periods IS NOT NULL 
-  WITH DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living 
-  RETURN county, state, periods, labor, living LIMIT 5
+Return ONLY the Cypher query, nothing else."""),
+        ("human", "{question}")
+    ])
+    
+    chain = cypher_prompt | st.session_state.llm | StrOutputParser()
+    try:
+        cypher = chain.invoke({"question": question}).strip().replace("```cypher", "").replace("```", "").strip()
+    except:
+        return []
+    
+    try:
+        driver = st.session_state.graph_rag.driver
+        with driver.session() as session:
+            records = [dict(r) for r in session.run(cypher)]
+    except:
+        return []
+    
+    seen = set()
+    results = []
+    for r in records:
+        if r.get("periods") and r.get("labor"):
+            key = f"{r['county']}|{r['state']}"
+            if key not in seen:
+                seen.add(key)
+                results.append({"label": f"{r['county']}, {r['state']}", "periods": r["periods"], "labor": r["labor"], "living": r["living"]})
+    return results[:8]
+
+def fetch_ranked_data(question: str) -> list:
+    """Fetch ranked data from Neo4j for horizontal bar charts"""
+    cypher_prompt = ChatPromptTemplate.from_messages([
+        ("system", """Generate a Neo4j Cypher query to fetch ranked data for a horizontal bar chart.
+
+Available node properties on ZipCode:
+- risk_score: numeric risk score (0-100)
+- risk_tier: 'Critical', 'High', 'Elevated', 'Moderate', or 'Low'
+- cost_of_labor: ERI labor cost index (100 = national average)
+- cost_of_living: ERI living cost index (100 = national average)
+- county, state: location fields
+- unemployment_rate: county-level unemployment
+
+Available node properties on State:
+- state_name, state_abbr
+- new_risk_score_pct: state-level risk score (0-100)
+- state_risk_tier: 'Critical', 'High', 'Elevated', 'Moderate', or 'Low'
+
+RULES:
+1. For state rankings: use State nodes, ORDER BY the metric DESC or ASC
+2. For county rankings: aggregate ZipCode data by county using avg()
+3. Always return: label (name), value (numeric), tier (risk tier if available)
+4. Use LIMIT to control count (default 10, or whatever the user asks)
+5. ORDER BY value DESC for "top/highest/most", ASC for "bottom/lowest/least"
+
+Examples:
+- "top 5 risk states" →
+  MATCH (s:State) WHERE s.new_risk_score_pct IS NOT NULL
+  RETURN s.state_name AS label, s.new_risk_score_pct AS value, s.state_risk_tier AS tier
+  ORDER BY s.new_risk_score_pct DESC LIMIT 5
+
+- "top 10 highest risk counties" →
+  MATCH (z:ZipCode) WHERE z.risk_score IS NOT NULL
+  WITH z.county + ', ' + z.state AS label, avg(z.risk_score) AS value
+  RETURN label, value, 
+    CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END AS tier
+  ORDER BY value DESC LIMIT 10
+
+- "most expensive states for labor" →
+  MATCH (z:ZipCode) WHERE z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0
+  WITH z.state AS st, avg(z.cost_of_labor) AS avg_cost
+  MATCH (s:State {state_abbr: st})
+  RETURN s.state_name AS label, avg_cost AS value, null AS tier
+  ORDER BY avg_cost DESC LIMIT 10
+
+- "states with lowest cost of living" →
+  MATCH (z:ZipCode) WHERE z.cost_of_living IS NOT NULL AND z.cost_of_living > 0
+  WITH z.state AS st, avg(z.cost_of_living) AS avg_cost
+  MATCH (s:State {state_abbr: st})
+  RETURN s.state_name AS label, avg_cost AS value, null AS tier
+  ORDER BY avg_cost ASC LIMIT 10
 
 Return ONLY the Cypher query, nothing else."""),
         ("human", "{question}")
     ])
     
     chain = cypher_prompt | st.session_state.llm | StrOutputParser()
-    
     try:
-        cypher = chain.invoke({"question": question}).strip()
-        cypher = cypher.replace("```cypher", "").replace("```", "").strip()
-    except Exception:
+        cypher = chain.invoke({"question": question}).strip().replace("```cypher", "").replace("```", "").strip()
+    except:
         return []
     
     try:
         driver = st.session_state.graph_rag.driver
         with driver.session() as session:
-            result = session.run(cypher)
-            records = [dict(r) for r in result]
-    except Exception:
+            records = [dict(r) for r in session.run(cypher)]
+    except:
         return []
     
-    # Deduplicate by county name (take first per county)
-    seen = set()
-    trend_results = []
+    results = []
     for r in records:
-        if r.get("periods") and r.get("labor"):
-            key = f"{r['county']}|{r['state']}"
-            if key not in seen:
-                seen.add(key)
-                trend_results.append({
-                    "label": f"{r['county']}, {r['state']}",
-                    "periods": r["periods"],
-                    "labor": r["labor"],
-                    "living": r["living"]
-                })
-    
-    # Cap at 8 locations max for readability
-    return trend_results[:8]
+        if r.get("label") is not None and r.get("value") is not None:
+            results.append({"label": str(r["label"]), "value": round(float(r["value"]), 1), "tier": r.get("tier")})
+    return results[:15]
 
-def detect_metric_type(question: str) -> str:
-    """Detect whether the question is about labor, living, or both"""
-    q_lower = question.lower()
-    has_labor = any(kw in q_lower for kw in ['labor', 'col ', 'cost of labor'])
-    has_living = any(kw in q_lower for kw in ['living', 'cost of living', 'coliv'])
-    
-    if has_labor and not has_living:
-        return "labor"
-    elif has_living and not has_labor:
-        return "living"
-    else:
-        return "both"
+# ============================================================
+# CHART CREATION FUNCTIONS
+# ============================================================
 
 def create_trend_chart(trend_data: list, question: str) -> go.Figure:
-    """Create an interactive Plotly chart from trend data"""
+    """Create an interactive line chart showing trends over time"""
     metric_type = detect_metric_type(question)
-    
     if not trend_data:
         return None
     
     fig = go.Figure()
-    
-    # Get readable period labels
     periods = trend_data[0]["periods"]
     x_labels = [PERIOD_LABELS.get(p, p) for p in periods]
-    
     color_idx = 0
     
     for loc in trend_data:
         label = loc["label"]
-        labor = loc["labor"]
-        living = loc["living"]
-        
-        if metric_type in ["labor", "both"]:
-            # Filter out 0.0 values (missing data)
-            labor_filtered = [(x, v) for x, v in zip(x_labels, labor) if v > 0]
-            if labor_filtered:
-                x_vals, y_vals = zip(*labor_filtered)
-                suffix = " - Cost of Labor" if metric_type == "both" else ""
-                fig.add_trace(go.Scatter(
-                    x=list(x_vals), y=list(y_vals),
-                    mode='lines+markers',
-                    name=f"{label}{suffix}",
-                    line=dict(color=CHART_COLORS[color_idx % len(CHART_COLORS)], width=3),
-                    marker=dict(size=8),
-                    hovertemplate='%{x}<br>Index: %{y:.1f}<extra>' + label + '</extra>'
-                ))
+        if metric_type in ["labor", "both", "risk"]:
+            filtered = [(x, v) for x, v in zip(x_labels, loc["labor"]) if v > 0]
+            if filtered:
+                x_vals, y_vals = zip(*filtered)
+                suffix = " — Labor" if metric_type == "both" else ""
+                fig.add_trace(go.Scatter(x=list(x_vals), y=list(y_vals), mode='lines+markers',
+                    name=f"{label}{suffix}", line=dict(color=CHART_COLORS[color_idx % len(CHART_COLORS)], width=3),
+                    marker=dict(size=8), hovertemplate='%{x}<br>Index: %{y:.1f}<extra>' + label + '</extra>'))
                 color_idx += 1
-        
         if metric_type in ["living", "both"]:
-            living_filtered = [(x, v) for x, v in zip(x_labels, living) if v > 0]
-            if living_filtered:
-                x_vals, y_vals = zip(*living_filtered)
-                suffix = " - Cost of Living" if metric_type == "both" else ""
-                fig.add_trace(go.Scatter(
-                    x=list(x_vals), y=list(y_vals),
-                    mode='lines+markers',
-                    name=f"{label}{suffix}",
-                    line=dict(color=CHART_COLORS[color_idx % len(CHART_COLORS)], width=3, dash='dash' if metric_type == "both" else 'solid'),
-                    marker=dict(size=8),
-                    hovertemplate='%{x}<br>Index: %{y:.1f}<extra>' + label + '</extra>'
-                ))
+            filtered = [(x, v) for x, v in zip(x_labels, loc["living"]) if v > 0]
+            if filtered:
+                x_vals, y_vals = zip(*filtered)
+                suffix = " — Living" if metric_type == "both" else ""
+                fig.add_trace(go.Scatter(x=list(x_vals), y=list(y_vals), mode='lines+markers',
+                    name=f"{label}{suffix}", line=dict(color=CHART_COLORS[color_idx % len(CHART_COLORS)], width=3,
+                    dash='dash' if metric_type == "both" else 'solid'), marker=dict(size=8),
+                    hovertemplate='%{x}<br>Index: %{y:.1f}<extra>' + label + '</extra>'))
                 color_idx += 1
     
-    # Determine title
+    # Title
     if len(trend_data) == 1:
         loc_name = trend_data[0]["label"]
-        if metric_type == "labor":
-            title = f"Cost of Labor Trend — {loc_name}"
-        elif metric_type == "living":
-            title = f"Cost of Living Trend — {loc_name}"
-        else:
-            title = f"ERI Cost Trends — {loc_name}"
+        title = {"labor": f"Cost of Labor Trend — {loc_name}", "living": f"Cost of Living Trend — {loc_name}"}.get(metric_type, f"ERI Cost Trends — {loc_name}")
     else:
-        if metric_type == "labor":
-            title = "Cost of Labor Comparison"
-        elif metric_type == "living":
-            title = "Cost of Living Comparison"
-        else:
-            title = "ERI Cost Trends Comparison"
+        title = {"labor": "Cost of Labor — Trend Comparison", "living": "Cost of Living — Trend Comparison"}.get(metric_type, "ERI Cost Trends — Comparison")
     
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=20, color='#1B4F5C', family='Arial')),
-        xaxis_title="",
-        yaxis_title="ERI Index (100 = National Average)",
-        hovermode='x unified',
-        template='plotly_white',
-        height=500,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.3,
-            xanchor="center",
-            x=0.5,
-            font=dict(size=12)
-        ),
+    fig.update_layout(title=dict(text=title, font=dict(size=20, color='#1B4F5C', family='Arial')),
+        xaxis_title="", yaxis_title="ERI Index (100 = National Average)", hovermode='x unified',
+        template='plotly_white', height=500, plot_bgcolor='white',
+        legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5, font=dict(size=12)),
         margin=dict(l=60, r=30, t=70, b=80),
         yaxis=dict(gridcolor='#E8E8E8', tickfont=dict(size=11)),
-        xaxis=dict(gridcolor='#E8E8E8', tickangle=-45, tickfont=dict(size=11)),
-        plot_bgcolor='white'
-    )
-    
-    # Add reference line at 100 (national average)
-    fig.add_hline(
-        y=100, line_dash="dash", line_color="#E74C3C", line_width=1.5,
+        xaxis=dict(gridcolor='#E8E8E8', tickangle=-45, tickfont=dict(size=11)))
+    fig.add_hline(y=100, line_dash="dash", line_color="#E74C3C", line_width=1.5,
         annotation_text="National Avg (100)", annotation_position="bottom right",
-        annotation_font=dict(color="#E74C3C", size=11)
-    )
-    
+        annotation_font=dict(color="#E74C3C", size=11))
     return fig
 
 def create_bar_chart(trend_data: list, question: str) -> go.Figure:
-    """Create a bar chart comparing current (latest period) values across locations"""
+    """Create a vertical bar chart comparing current values across locations"""
     metric_type = detect_metric_type(question)
-    
     if not trend_data:
         return None
     
-    labels = []
-    labor_values = []
-    living_values = []
-    
+    labels, labor_values, living_values = [], [], []
     for loc in trend_data:
         labels.append(loc["label"])
-        # Get latest non-zero value
-        labor_vals = [v for v in loc["labor"] if v > 0]
-        living_vals = [v for v in loc["living"] if v > 0]
-        labor_values.append(labor_vals[-1] if labor_vals else 0)
-        living_values.append(living_vals[-1] if living_vals else 0)
+        lv = [v for v in loc["labor"] if v > 0]
+        cv = [v for v in loc["living"] if v > 0]
+        labor_values.append(lv[-1] if lv else 0)
+        living_values.append(cv[-1] if cv else 0)
     
     fig = go.Figure()
-    
-    if metric_type in ["labor", "both"]:
-        fig.add_trace(go.Bar(
-            x=labels, y=labor_values,
-            name="Cost of Labor",
+    if metric_type in ["labor", "both", "risk"]:
+        fig.add_trace(go.Bar(x=labels, y=labor_values, name="Cost of Labor",
             marker_color=[CHART_COLORS[i % len(CHART_COLORS)] for i in range(len(labels))] if metric_type == "labor" else [CHART_COLORS[0]] * len(labels),
-            text=[f"{v:.1f}" for v in labor_values],
-            textposition='outside',
+            text=[f"{v:.1f}" for v in labor_values], textposition='outside',
             textfont=dict(size=14, color='#333333', family='Arial Black'),
             hovertemplate='<b>%{x}</b><br>Cost of Labor: %{y:.1f}<br>vs National Avg: %{customdata:+.1f}<extra></extra>',
-            customdata=[v - 100 for v in labor_values]
-        ))
-    
+            customdata=[v - 100 for v in labor_values]))
     if metric_type in ["living", "both"]:
-        fig.add_trace(go.Bar(
-            x=labels, y=living_values,
-            name="Cost of Living",
-            marker_color=[CHART_COLORS[i + 1 % len(CHART_COLORS)] for i in range(len(labels))] if metric_type == "living" else [CHART_COLORS[1]] * len(labels),
-            text=[f"{v:.1f}" for v in living_values],
-            textposition='outside',
+        fig.add_trace(go.Bar(x=labels, y=living_values, name="Cost of Living",
+            marker_color=[CHART_COLORS[(i+1) % len(CHART_COLORS)] for i in range(len(labels))] if metric_type == "living" else [CHART_COLORS[1]] * len(labels),
+            text=[f"{v:.1f}" for v in living_values], textposition='outside',
             textfont=dict(size=14, color='#333333', family='Arial Black'),
             hovertemplate='<b>%{x}</b><br>Cost of Living: %{y:.1f}<br>vs National Avg: %{customdata:+.1f}<extra></extra>',
-            customdata=[v - 100 for v in living_values]
-        ))
+            customdata=[v - 100 for v in living_values]))
     
-    # Determine title
-    if metric_type == "labor":
-        title = "Cost of Labor Comparison — Latest Period"
-    elif metric_type == "living":
-        title = "Cost of Living Comparison — Latest Period"
-    else:
-        title = "ERI Cost Comparison — Latest Period"
-    
-    # Calculate y-axis range for clean spacing above bars
-    all_vals = (labor_values if metric_type in ["labor", "both"] else []) + \
-               (living_values if metric_type in ["living", "both"] else [])
+    title = {"labor": "Cost of Labor Comparison — Latest Period", "living": "Cost of Living Comparison — Latest Period"}.get(metric_type, "ERI Cost Comparison — Latest Period")
+    all_vals = (labor_values if metric_type in ["labor", "both", "risk"] else []) + (living_values if metric_type in ["living", "both"] else [])
     y_max = max(all_vals) * 1.15 if all_vals else 150
     
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=20, color='#1B4F5C', family='Arial')),
-        xaxis_title="",
-        yaxis_title="ERI Index (100 = National Average)",
-        barmode='group',
-        template='plotly_white',
-        height=500,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5,
-                    font=dict(size=12)),
+    fig.update_layout(title=dict(text=title, font=dict(size=20, color='#1B4F5C', family='Arial')),
+        xaxis_title="", yaxis_title="ERI Index (100 = National Average)", barmode='group',
+        template='plotly_white', height=500, plot_bgcolor='white',
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5, font=dict(size=12)),
         margin=dict(l=60, r=30, t=70, b=60),
         yaxis=dict(gridcolor='#E8E8E8', range=[0, y_max]),
-        xaxis=dict(tickfont=dict(size=13, color='#333333')),
-        plot_bgcolor='white'
-    )
-    
-    # Add reference line at 100
-    fig.add_hline(
-        y=100, line_dash="dash", line_color="#E74C3C", line_width=2,
+        xaxis=dict(tickfont=dict(size=13, color='#333333')))
+    fig.add_hline(y=100, line_dash="dash", line_color="#E74C3C", line_width=2,
         annotation_text="National Avg (100)", annotation_position="bottom right",
-        annotation_font=dict(color="#E74C3C", size=11)
-    )
+        annotation_font=dict(color="#E74C3C", size=11))
+    return fig
+
+def create_hbar_chart(ranked_data: list, question: str) -> go.Figure:
+    """Create a horizontal bar chart for ranked data — Power BI quality"""
+    if not ranked_data:
+        return None
+    
+    # Reverse so highest appears at top
+    ranked_data = list(reversed(ranked_data))
+    labels = [r["label"] for r in ranked_data]
+    values = [r["value"] for r in ranked_data]
+    tiers = [r.get("tier") for r in ranked_data]
+    
+    # Determine colors
+    if any(tiers):
+        colors = []
+        for r in ranked_data:
+            tier = r.get("tier")
+            if tier and tier in RISK_COLORS:
+                colors.append(RISK_COLORS[tier])
+            else:
+                v = r["value"]
+                if v >= 80: colors.append(RISK_COLORS['Critical'])
+                elif v >= 60: colors.append(RISK_COLORS['High'])
+                elif v >= 40: colors.append(RISK_COLORS['Elevated'])
+                elif v >= 20: colors.append(RISK_COLORS['Moderate'])
+                else: colors.append(RISK_COLORS['Low'])
+    else:
+        max_val = max(values) if values else 1
+        min_val = min(values) if values else 0
+        colors = []
+        for v in values:
+            ratio = (v - min_val) / (max_val - min_val) if max_val > min_val else 0.5
+            if ratio > 0.75: colors.append('#CC0000')
+            elif ratio > 0.5: colors.append('#E74C3C')
+            elif ratio > 0.25: colors.append('#F39C12')
+            else: colors.append('#2ECC71')
+    
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=labels, x=values, orientation='h', marker_color=colors,
+        text=[f"  {v:.1f}" for v in values], textposition='outside',
+        textfont=dict(size=13, color='#333333', family='Arial Black'),
+        hovertemplate='<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>'))
+    
+    q_lower = question.lower()
+    if 'risk' in q_lower or 'score' in q_lower:
+        title = "Counties by Average Risk Score (%)" if ('county' in q_lower or 'counties' in q_lower) else "States by Average Risk Score (%)"
+        x_label = "Risk Score (%)"
+    elif 'labor' in q_lower:
+        title, x_label = "Cost of Labor Rankings", "ERI Index (100 = National Avg)"
+    elif 'living' in q_lower:
+        title, x_label = "Cost of Living Rankings", "ERI Index (100 = National Avg)"
+    elif 'expensive' in q_lower:
+        title, x_label = "Most Expensive Markets", "ERI Index (100 = National Avg)"
+    else:
+        title, x_label = "Rankings", "Value"
+    
+    chart_height = max(400, len(ranked_data) * 40 + 120)
+    
+    fig.update_layout(title=dict(text=title, font=dict(size=20, color='#1B4F5C', family='Arial')),
+        xaxis_title=x_label, yaxis_title="", template='plotly_white', height=chart_height,
+        plot_bgcolor='white', showlegend=False,
+        margin=dict(l=200, r=80, t=70, b=50),
+        xaxis=dict(gridcolor='#E8E8E8', tickfont=dict(size=11)),
+        yaxis=dict(tickfont=dict(size=12, color='#333333')))
+    
+    if 'risk' in q_lower or 'score' in q_lower:
+        fig.add_vline(x=80, line_dash="dash", line_color="#CC0000", line_width=1.5,
+            annotation_text="Critical (80)", annotation_position="top",
+            annotation_font=dict(color="#CC0000", size=10))
+    elif any(kw in q_lower for kw in ['labor', 'living', 'cost', 'expensive']):
+        fig.add_vline(x=100, line_dash="dash", line_color="#E74C3C", line_width=1.5,
+            annotation_text="National Avg (100)", annotation_position="top",
+            annotation_font=dict(color="#E74C3C", size=10))
     
     return fig
 
-def create_chart(trend_data: list, question: str) -> go.Figure:
-    """Router: pick the right chart type based on the question"""
-    chart_type = detect_chart_type(question)
-    if chart_type == "bar":
-        return create_bar_chart(trend_data, question)
-    else:
-        return create_trend_chart(trend_data, question)
+def create_chart(chart_type: str, data: list, question: str) -> go.Figure:
+    """Router: create the appropriate chart based on type"""
+    if chart_type == "LINE_TREND":
+        return create_trend_chart(data, question)
+    elif chart_type == "BAR_COMPARE":
+        return create_bar_chart(data, question)
+    elif chart_type == "HBAR_RANK":
+        return create_hbar_chart(data, question)
+    return None
+
 
 def generate_response(question: str) -> dict:
     """Generate comprehensive response with session memory. Returns dict with 'text' and optional 'chart'."""
@@ -546,23 +642,43 @@ def generate_response(question: str) -> dict:
     # Step 1: Resolve follow-up questions using conversation history
     resolved_question = resolve_follow_up(question)
     
-    # Step 2: Check if this is a trend question that needs a chart
+    # Step 2: Intelligent chart generation
     chart_data = None
     chart_error = None
-    if is_trend_question(resolved_question):
+    if should_generate_chart(resolved_question):
         try:
-            trend_data = fetch_trend_data(resolved_question)
-            if trend_data:
-                chart_data = {"trend_data": trend_data, "question": resolved_question}
-                chart_error = f"OK: {len(trend_data)} locations"
-            else:
-                chart_error = "fetch returned empty list"
+            chart_type = classify_chart_type(resolved_question)
+            chart_error = f"type={chart_type}"
+            
+            if chart_type == "LINE_TREND":
+                data = fetch_trend_data(resolved_question)
+                if data:
+                    chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
+                    chart_error += f", OK: {len(data)} locations"
+                else:
+                    chart_error += ", no data"
+            
+            elif chart_type == "BAR_COMPARE":
+                data = fetch_trend_data(resolved_question)  # Uses latest period values
+                if data:
+                    chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
+                    chart_error += f", OK: {len(data)} locations"
+                else:
+                    chart_error += ", no data"
+            
+            elif chart_type == "HBAR_RANK":
+                data = fetch_ranked_data(resolved_question)
+                if data:
+                    chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
+                    chart_error += f", OK: {len(data)} items"
+                else:
+                    chart_error += ", no data"
+            
         except Exception as e:
             chart_error = str(e)[:200]
     else:
-        chart_error = "not a trend question"
+        chart_error = "no chart needed"
     
-    # Store debug info
     st.session_state["_chart_debug"] = chart_error
     
     # Step 3: Classify the resolved question
@@ -744,7 +860,7 @@ for message in st.session_state.messages:
         if message.get("chart_data") is not None:
             try:
                 cd = message["chart_data"]
-                fig = create_chart(cd["trend_data"], cd["question"])
+                fig = create_chart(cd["chart_type"], cd["data"], cd["question"])
                 if fig:
                     chart_key = f"chart_{id(message)}_{hash(message['content'][:50])}"
                     st.plotly_chart(fig, use_container_width=True, key=chart_key)
@@ -770,7 +886,7 @@ if prompt := st.chat_input("Ask me anything about Minimum Wage Risk..."):
             if response.get("chart_data") is not None:
                 try:
                     cd = response["chart_data"]
-                    fig = create_chart(cd["trend_data"], cd["question"])
+                    fig = create_chart(cd["chart_type"], cd["data"], cd["question"])
                     if fig:
                         st.plotly_chart(fig, use_container_width=True, key="chart_live")
                 except Exception as e:
