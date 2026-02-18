@@ -932,7 +932,11 @@ def generate_response(question: str) -> dict:
     # Step 2: Intelligent chart generation
     chart_data = None
     chart_error = None
+    chart_attempted = False  # Track if we tried to generate a chart
+    chart_failed_reason = None  # User-friendly reason if chart fails
+    
     if should_generate_chart(resolved_question):
+        chart_attempted = True
         try:
             chart_type = classify_chart_type(resolved_question)
             
@@ -945,11 +949,11 @@ def generate_response(question: str) -> dict:
                 ])
                 if not has_eri_keywords:
                     chart_type = "NONE"
-                    # Store a friendly message for the user
                     st.session_state["_trend_unavailable"] = True
+                    chart_failed_reason = "trend_unavailable"
             
             # Safety net: Force HBAR_RANK if classifier says NONE but question is clearly a ranking
-            if chart_type == "NONE":
+            if chart_type == "NONE" and not chart_failed_reason:
                 q_check = resolved_question.lower()
                 has_rank_signal = any(kw in q_check for kw in [
                     'top ', 'highest', 'lowest', 'rank', 'most ', 'least ',
@@ -971,15 +975,17 @@ def generate_response(question: str) -> dict:
                     chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
                     chart_error += f", OK: {len(data)} locations"
                 else:
-                    chart_error += ", no data"
+                    chart_error += ", no trend data found"
+                    chart_failed_reason = chart_failed_reason or "no_data"
             
             elif chart_type == "BAR_COMPARE":
-                data = fetch_trend_data(resolved_question)  # Uses latest period values
+                data = fetch_trend_data(resolved_question)
                 if data:
                     chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
                     chart_error += f", OK: {len(data)} locations"
                 else:
-                    chart_error += ", no data"
+                    chart_error += ", no comparison data found"
+                    chart_failed_reason = chart_failed_reason or "no_data"
             
             elif chart_type == "HBAR_RANK":
                 data = fetch_ranked_data(resolved_question)
@@ -987,10 +993,12 @@ def generate_response(question: str) -> dict:
                     chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
                     chart_error += f", OK: {len(data)} items"
                 else:
-                    chart_error += ", no data"
+                    chart_error += ", no ranking data found"
+                    chart_failed_reason = chart_failed_reason or "no_data"
             
         except Exception as e:
             chart_error = str(e)[:200]
+            chart_failed_reason = "error"
     else:
         chart_error = "no chart needed"
     
@@ -1065,11 +1073,14 @@ Provide a helpful answer:""")
             "context": context,
             "conversation_history": conversation_context if conversation_context else "No previous conversation."
         })
-        # Append trend unavailable note if applicable
-        if st.session_state.get("_trend_unavailable"):
+        # Append chart status note if applicable
+        if chart_failed_reason == "trend_unavailable":
             text += "\n\n---\n📊 *Sorry, we don't have enough historical data to show a trend chart for this metric at this time. Trend charts are currently available for Cost of Labor and Cost of Living only.*"
+        elif chart_failed_reason == "no_data" and chart_attempted:
+            text += "\n\n---\n📊 *A chart was requested but could not be generated — the data query returned no results. Try rephrasing your question or specifying states/counties.*"
+        elif chart_failed_reason == "error" and chart_attempted:
+            text += "\n\n---\n📊 *A chart could not be generated due to a system error. The text analysis above is still accurate.*"
         return {"text": text, "chart_data": chart_data}
-    else:
         # General question - answer directly with conversation history
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are the MWR AI Assistant for Sodexo — a workforce market intelligence system.
@@ -1088,9 +1099,13 @@ Previous Conversation:
             "question": question,
             "conversation_history": conversation_context if conversation_context else "No previous conversation."
         })
-        # Append trend unavailable note if applicable
-        if st.session_state.get("_trend_unavailable"):
+        # Append chart status note if applicable
+        if chart_failed_reason == "trend_unavailable":
             text += "\n\n---\n📊 *Sorry, we don't have enough historical data to show a trend chart for this metric at this time. Trend charts are currently available for Cost of Labor and Cost of Living only.*"
+        elif chart_failed_reason == "no_data" and chart_attempted:
+            text += "\n\n---\n📊 *A chart was requested but could not be generated — the data query returned no results. Try rephrasing your question or specifying states/counties.*"
+        elif chart_failed_reason == "error" and chart_attempted:
+            text += "\n\n---\n📊 *A chart could not be generated due to a system error. The text analysis above is still accurate.*"
         return {"text": text, "chart_data": chart_data}
 
 def process_question(question: str):
