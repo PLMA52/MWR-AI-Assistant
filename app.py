@@ -641,6 +641,8 @@ def _fallback_ranked_query(question: str, limit: int) -> list:
                               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END"""
                 where = "z.newRiskScorePct IS NOT NULL"
             
+            # Build generic cypher for all field-based metrics (not population which has its own)
+            if not any(kw in q_lower for kw in ['population', 'largest', 'biggest', 'populated']):
                 cypher = f"""
                 MATCH (z:ZipCode) WHERE {where}
                 WITH z.state AS st, avg(z.{field}) AS value
