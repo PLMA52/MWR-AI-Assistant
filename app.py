@@ -952,6 +952,22 @@ def generate_response(question: str) -> dict:
                     st.session_state["_trend_unavailable"] = True
                     chart_failed_reason = "trend_unavailable"
             
+            # Also catch when classifier correctly returns NONE for non-ERI trend requests
+            # (e.g. "unemployment trend" — classifier learned to return NONE, but user still expects feedback)
+            if chart_type == "NONE" and not chart_failed_reason:
+                q_check = resolved_question.lower()
+                has_trend_word = any(kw in q_check for kw in ['trend', 'over time', 'historical', 'history', 'trajectory', 'evolve'])
+                has_non_eri_metric = any(kw in q_check for kw in [
+                    'unemployment', 'risk', 'education', 'income', 'population',
+                    'wage', 'diploma', 'workforce'
+                ])
+                has_eri_keywords = any(kw in q_check for kw in [
+                    'cost of labor', 'cost of living', 'eri', 'col ', 'coliv',
+                    'labor cost', 'living cost'
+                ])
+                if has_trend_word and has_non_eri_metric and not has_eri_keywords:
+                    chart_failed_reason = "trend_unavailable"
+            
             # Safety net: Force HBAR_RANK if classifier says NONE but question is clearly a ranking
             if chart_type == "NONE" and not chart_failed_reason:
                 q_check = resolved_question.lower()
