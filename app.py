@@ -462,9 +462,13 @@ FIELD MAPPING:
 - "cost of living", "expensive living" → use cost_of_living, tier = null  
 - "unemployment", "jobless" → use unemployment_rate, tier = null
 - "income", "wealthy", "richest" → use median_household_income (use AVG), tier = null
-- "population", "largest", "populated" → use total_population with SUM (not AVG!), tier = null
-  IMPORTANT: For population rankings, always use sum(z.total_population), never avg().
-- "workforce" → use workforce_population with SUM (not AVG!), tier = null
+- "population", "largest", "populated" → use total_population, tier = null
+  IMPORTANT: Population is stored at county level on each ZIP. To avoid double-counting, FIRST group by county to get one value per county, THEN sum counties for state totals:
+  MATCH (z:ZipCode) WHERE z.total_population IS NOT NULL
+  WITH z.state AS st, z.county AS county, avg(z.total_population) AS county_pop
+  WITH st, sum(county_pop) AS value
+  MATCH (s:State {abbr: st}) RETURN s.name AS label, round(value) AS value, null AS tier
+- "workforce" → use workforce_population, same deduplication pattern as population, tier = null
 - "educated", "education", "college", "degree" → use (z.pct_bachelors + z.pct_graduate) as COMBINED college-educated %, tier = null
   IMPORTANT: For education rankings, always compute the value as avg(z.pct_bachelors + z.pct_graduate).
   Example: WITH z.county + ', ' + z.state AS label, avg(z.pct_bachelors + z.pct_graduate) AS value
@@ -616,12 +620,14 @@ def _fallback_ranked_query(question: str, limit: int) -> list:
                 field, tier_expr = "median_household_income", "null"
                 where = "z.median_household_income IS NOT NULL"
             elif any(kw in q_lower for kw in ['population', 'largest', 'biggest', 'populated']):
-                # Population needs SUM, not AVG — handled separately
+                # Population: deduplicate by county first (since all ZIPs in a county share the county pop),
+                # then sum counties to get state total
                 cypher = f"""
                 MATCH (z:ZipCode) WHERE z.total_population IS NOT NULL
-                WITH z.state AS st, sum(z.total_population) AS value
+                WITH z.state AS st, z.county AS county, avg(z.total_population) AS county_pop
+                WITH st, sum(county_pop) AS value
                 MATCH (s:State {{abbr: st}})
-                RETURN s.name AS label, value, null AS tier
+                RETURN s.name AS label, round(value) AS value, null AS tier
                 ORDER BY value {order} LIMIT {limit}
                 """
             else:
@@ -811,17 +817,14 @@ def create_hbar_chart(ranked_data: list, question: str) -> go.Figure:
     # Format bar labels based on metric type
     def fmt_value(v):
         if metric_fmt == "currency":
-            if v >= 1_000_000:
-                return f"  ${v:,.0f}"
-            else:
-                return f"  ${v:,.1f}"
+            return f"  ${v:,.0f}"
         elif metric_fmt == "population":
             if v >= 1_000_000_000:
                 return f"  {v/1_000_000_000:.1f}B"
             elif v >= 1_000_000:
                 return f"  {v/1_000_000:.1f}M"
             elif v >= 1_000:
-                return f"  {v/1_000:.0f}K"
+                return f"  {v:,.0f}"
             else:
                 return f"  {v:,.0f}"
         else:
@@ -860,12 +863,25 @@ def create_hbar_chart(ranked_data: list, question: str) -> go.Figure:
     
     chart_height = max(400, len(ranked_data) * 40 + 120)
     
+    # Dynamic right margin based on label length
+    if metric_fmt == "currency":
+        r_margin = 140
+    elif metric_fmt == "population":
+        r_margin = 100
+    else:
+        r_margin = 80
+    
     fig.update_layout(title=dict(text=title, font=dict(size=20, color='#1B4F5C', family='Arial')),
         xaxis_title=x_label, yaxis_title="", template='plotly_white', height=chart_height,
         plot_bgcolor='white', showlegend=False,
-        margin=dict(l=200, r=80, t=70, b=50),
+        margin=dict(l=200, r=r_margin, t=70, b=50),
         xaxis=dict(gridcolor='#E8E8E8', tickfont=dict(size=11)),
         yaxis=dict(tickfont=dict(size=12, color='#333333')))
+    
+    # Add x-axis padding so text labels don't overflow
+    if metric_fmt in ("currency", "population") and values:
+        max_val = max(values)
+        fig.update_xaxes(range=[0, max_val * 1.25])
     
     if 'risk' in q_lower or 'score' in q_lower:
         fig.add_vline(x=80, line_dash="dash", line_color="#CC0000", line_width=1.5,
