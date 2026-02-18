@@ -1081,6 +1081,7 @@ Provide a helpful answer:""")
         elif chart_failed_reason == "error" and chart_attempted:
             text += "\n\n---\n📊 *A chart could not be generated due to a system error. The text analysis above is still accurate.*"
         return {"text": text, "chart_data": chart_data}
+    else:
         # General question - answer directly with conversation history
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are the MWR AI Assistant for Sodexo — a workforce market intelligence system.
