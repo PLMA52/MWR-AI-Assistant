@@ -946,6 +946,21 @@ def generate_response(question: str) -> dict:
                     # Store a friendly message for the user
                     st.session_state["_trend_unavailable"] = True
             
+            # Safety net: Force HBAR_RANK if classifier says NONE but question is clearly a ranking
+            if chart_type == "NONE":
+                q_check = resolved_question.lower()
+                has_rank_signal = any(kw in q_check for kw in [
+                    'top ', 'highest', 'lowest', 'rank', 'most ', 'least ',
+                    'best ', 'worst', 'safest', 'riskiest', 'cheapest', 'expensive',
+                    'wealthiest', 'richest', 'poorest', 'bottom '
+                ])
+                has_metric = any(kw in q_check for kw in [
+                    'risk', 'income', 'population', 'unemployment', 'education',
+                    'labor', 'living', 'cost', 'populated', 'educated', 'workforce'
+                ])
+                if has_rank_signal and has_metric:
+                    chart_type = "HBAR_RANK"
+            
             chart_error = f"type={chart_type}"
             
             if chart_type == "LINE_TREND":
