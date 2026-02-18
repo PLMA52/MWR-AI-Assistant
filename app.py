@@ -461,8 +461,10 @@ FIELD MAPPING:
 - "cost of labor", "expensive labor", "labor cost" → use cost_of_labor, tier = null
 - "cost of living", "expensive living" → use cost_of_living, tier = null  
 - "unemployment", "jobless" → use unemployment_rate, tier = null
-- "income", "wealthy", "richest" → use median_household_income, tier = null
-- "population", "largest" → use total_population, tier = null
+- "income", "wealthy", "richest" → use median_household_income (use AVG), tier = null
+- "population", "largest", "populated" → use total_population with SUM (not AVG!), tier = null
+  IMPORTANT: For population rankings, always use sum(z.total_population), never avg().
+- "workforce" → use workforce_population with SUM (not AVG!), tier = null
 - "educated", "education", "college", "degree" → use (z.pct_bachelors + z.pct_graduate) as COMBINED college-educated %, tier = null
   IMPORTANT: For education rankings, always compute the value as avg(z.pct_bachelors + z.pct_graduate).
   Example: WITH z.county + ', ' + z.state AS label, avg(z.pct_bachelors + z.pct_graduate) AS value
@@ -613,22 +615,28 @@ def _fallback_ranked_query(question: str, limit: int) -> list:
             elif any(kw in q_lower for kw in ['income', 'wealthy', 'richest']):
                 field, tier_expr = "median_household_income", "null"
                 where = "z.median_household_income IS NOT NULL"
-            elif any(kw in q_lower for kw in ['population', 'largest', 'biggest']):
-                field, tier_expr = "total_population", "null"
-                where = "z.total_population IS NOT NULL"
+            elif any(kw in q_lower for kw in ['population', 'largest', 'biggest', 'populated']):
+                # Population needs SUM, not AVG — handled separately
+                cypher = f"""
+                MATCH (z:ZipCode) WHERE z.total_population IS NOT NULL
+                WITH z.state AS st, sum(z.total_population) AS value
+                MATCH (s:State {{abbr: st}})
+                RETURN s.name AS label, value, null AS tier
+                ORDER BY value {order} LIMIT {limit}
+                """
             else:
                 field = "newRiskScorePct"
                 tier_expr = """CASE WHEN value >= 80 THEN 'Critical' WHEN value >= 60 THEN 'High' 
                               WHEN value >= 40 THEN 'Elevated' WHEN value >= 20 THEN 'Moderate' ELSE 'Low' END"""
                 where = "z.newRiskScorePct IS NOT NULL"
             
-            cypher = f"""
-            MATCH (z:ZipCode) WHERE {where}
-            WITH z.state AS st, avg(z.{field}) AS value
-            MATCH (s:State {{abbr: st}})
-            RETURN s.name AS label, value, {tier_expr} AS tier
-            ORDER BY value {order} LIMIT {limit}
-            """
+                cypher = f"""
+                MATCH (z:ZipCode) WHERE {where}
+                WITH z.state AS st, avg(z.{field}) AS value
+                MATCH (s:State {{abbr: st}})
+                RETURN s.name AS label, value, {tier_expr} AS tier
+                ORDER BY value {order} LIMIT {limit}
+                """
     
     st.session_state["_rank_cypher"] = cypher.strip()[:300]
     
@@ -786,14 +794,45 @@ def create_hbar_chart(ranked_data: list, question: str) -> go.Figure:
             else: colors.append('#2ECC71')
     
     fig = go.Figure()
-    fig.add_trace(go.Bar(y=labels, x=values, orientation='h', marker_color=colors,
-        text=[f"  {v:.1f}" for v in values], textposition='outside',
-        textfont=dict(size=13, color='#333333', family='Arial Black'),
-        hovertemplate='<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>'))
     
+    # Determine metric type for number formatting
     q_lower = question.lower()
     is_county = ('county' in q_lower or 'counties' in q_lower)
     geo = "Counties" if is_county else "States"
+    
+    # Detect metric for formatting
+    if any(kw in q_lower for kw in ['income', 'wealthy', 'richest']):
+        metric_fmt = "currency"
+    elif any(kw in q_lower for kw in ['population', 'largest', 'biggest', 'populated', 'workforce']):
+        metric_fmt = "population"
+    else:
+        metric_fmt = "decimal"  # risk %, unemployment %, ERI index, education %
+    
+    # Format bar labels based on metric type
+    def fmt_value(v):
+        if metric_fmt == "currency":
+            if v >= 1_000_000:
+                return f"  ${v:,.0f}"
+            else:
+                return f"  ${v:,.1f}"
+        elif metric_fmt == "population":
+            if v >= 1_000_000_000:
+                return f"  {v/1_000_000_000:.1f}B"
+            elif v >= 1_000_000:
+                return f"  {v/1_000_000:.1f}M"
+            elif v >= 1_000:
+                return f"  {v/1_000:.0f}K"
+            else:
+                return f"  {v:,.0f}"
+        else:
+            return f"  {v:.1f}"
+    
+    bar_texts = [fmt_value(v) for v in values]
+    
+    fig.add_trace(go.Bar(y=labels, x=values, orientation='h', marker_color=colors,
+        text=bar_texts, textposition='outside',
+        textfont=dict(size=13, color='#333333', family='Arial Black'),
+        hovertemplate='<b>%{y}</b><br>Value: %{x:,.1f}<extra></extra>'))
     
     if 'risk' in q_lower or 'score' in q_lower:
         title = f"{geo} by Average Risk Score (%)"
@@ -812,8 +851,8 @@ def create_hbar_chart(ranked_data: list, question: str) -> go.Figure:
         title, x_label = f"{geo} by No Diploma Rate", "No Diploma (%)"
     elif any(kw in q_lower for kw in ['income', 'wealthy', 'richest']):
         title, x_label = f"{geo} by Median Household Income", "Median Income ($)"
-    elif any(kw in q_lower for kw in ['population', 'largest', 'biggest']):
-        title, x_label = f"{geo} by Population", "Population"
+    elif any(kw in q_lower for kw in ['population', 'largest', 'biggest', 'populated']):
+        title, x_label = f"{geo} by Total Population", "Population"
     elif any(kw in q_lower for kw in ['workforce']):
         title, x_label = f"{geo} by Workforce Population", "Workforce (18-64)"
     else:
