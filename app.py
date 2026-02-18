@@ -284,6 +284,11 @@ Examples:
 - "which states have highest unemployment" → HBAR_RANK
 - "rank states by cost of living" → HBAR_RANK
 - "rank counties by education level" → HBAR_RANK
+- "rank states by income" → HBAR_RANK
+- "wealthiest states" → HBAR_RANK
+- "top 10 most populated states" → HBAR_RANK
+- "safest states for minimum wage risk" → HBAR_RANK
+- "lowest cost of living counties" → HBAR_RANK
 - "cost of labor trend in SF" → LINE_TREND
 - "how has cost of living changed over time" → LINE_TREND
 - "ERI trend in Maryland" → LINE_TREND
