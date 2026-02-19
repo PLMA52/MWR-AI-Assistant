@@ -586,6 +586,71 @@ Return ONLY the Cypher query, nothing else."""),
                 results.append({"label": f"{r['county']}, {r['state']}", "periods": r["periods"], "labor": r["labor"], "living": r["living"]})
     return results[:8]
 
+
+def _fetch_state_bar_compare(question: str) -> list:
+    """Fallback for BAR_COMPARE: fetch current cost_of_labor/cost_of_living averages per state.
+    Returns data in the same format as fetch_trend_data so create_bar_chart can consume it."""
+    
+    # Common state name to abbreviation mapping
+    state_map = {
+        'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
+        'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE', 'florida': 'FL', 'georgia': 'GA',
+        'hawaii': 'HI', 'idaho': 'ID', 'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA',
+        'kansas': 'KS', 'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+        'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
+        'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV', 'new hampshire': 'NH',
+        'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC',
+        'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK', 'oregon': 'OR', 'pennsylvania': 'PA',
+        'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD', 'tennessee': 'TN',
+        'texas': 'TX', 'utah': 'UT', 'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA',
+        'west virginia': 'WV', 'wisconsin': 'WI', 'wyoming': 'WY', 'district of columbia': 'DC'
+    }
+    
+    # Extract state names from question
+    q_lower = question.lower()
+    found_states = []
+    for state_name, abbr in sorted(state_map.items(), key=lambda x: -len(x[0])):
+        if state_name in q_lower:
+            found_states.append((state_name, abbr))
+    
+    if len(found_states) < 2:
+        return []
+    
+    # Limit to first 5 states
+    found_states = found_states[:5]
+    abbrs = [s[1] for s in found_states]
+    
+    # Query current averages per state
+    cypher = """
+    MATCH (z:ZipCode) WHERE z.state IN $states AND z.cost_of_labor IS NOT NULL AND z.cost_of_labor > 0
+    WITH z.state AS st, avg(z.cost_of_labor) AS labor_avg, avg(z.cost_of_living) AS living_avg
+    MATCH (s:State {abbr: st})
+    RETURN s.name AS name, st AS state, labor_avg, living_avg
+    """
+    
+    try:
+        driver = st.session_state.graph_rag.driver
+        with driver.session() as session:
+            records = [dict(r) for r in session.run(cypher, states=abbrs)]
+    except:
+        return []
+    
+    if not records:
+        return []
+    
+    # Convert to trend_data format (with single-element lists for bar chart compatibility)
+    results = []
+    for r in records:
+        results.append({
+            "label": r["name"],
+            "periods": ["Current"],
+            "labor": [round(r["labor_avg"], 1)],
+            "living": [round(r["living_avg"], 1)]
+        })
+    
+    return results
+
+
 def fetch_ranked_data(question: str) -> list:
     """HYBRID approach: LLM generates Cypher first, validated, with hardcoded fallback.
     
@@ -1191,6 +1256,9 @@ def generate_response(question: str) -> dict:
             
             elif chart_type == "BAR_COMPARE":
                 data = fetch_trend_data(resolved_question)
+                if not data:
+                    # Fallback: try state-level comparison using current values instead of time-series
+                    data = _fetch_state_bar_compare(resolved_question)
                 if data:
                     chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
                     chart_error += f", OK: {len(data)} locations"
