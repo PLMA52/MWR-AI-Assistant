@@ -651,6 +651,71 @@ def _fetch_state_bar_compare(question: str) -> list:
     return results
 
 
+def _fetch_state_trend_compare(question: str) -> list:
+    """Fallback for LINE_TREND: pick one representative county per state and return its time-series.
+    Uses the county with the most ZIP codes as the representative for each state."""
+    
+    # Common state name to abbreviation mapping
+    state_map = {
+        'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
+        'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE', 'florida': 'FL', 'georgia': 'GA',
+        'hawaii': 'HI', 'idaho': 'ID', 'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA',
+        'kansas': 'KS', 'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+        'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
+        'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV', 'new hampshire': 'NH',
+        'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC',
+        'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK', 'oregon': 'OR', 'pennsylvania': 'PA',
+        'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD', 'tennessee': 'TN',
+        'texas': 'TX', 'utah': 'UT', 'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA',
+        'west virginia': 'WV', 'wisconsin': 'WI', 'wyoming': 'WY', 'district of columbia': 'DC'
+    }
+    
+    # Extract state names from question
+    q_lower = question.lower()
+    found_states = []
+    for state_name, abbr in sorted(state_map.items(), key=lambda x: -len(x[0])):
+        if state_name in q_lower and abbr not in [s[1] for s in found_states]:
+            found_states.append((state_name, abbr))
+    
+    if not found_states:
+        return []
+    
+    abbrs = [s[1] for s in found_states[:5]]
+    
+    # For each state, pick the representative county (most ZIP codes = most data)
+    cypher = """
+    MATCH (z:ZipCode) WHERE z.state IN $states AND z.eri_periods IS NOT NULL
+    WITH z.state AS st, z.county AS county, z.eri_periods AS periods, 
+         z.eri_labor_history AS labor, z.eri_living_history AS living, count(*) AS zip_count
+    ORDER BY zip_count DESC
+    WITH st, head(collect({county: county, periods: periods, labor: labor, living: living})) AS rep
+    MATCH (s:State {abbr: st})
+    RETURN s.name AS label, st AS state, rep.periods AS periods, rep.labor AS labor, rep.living AS living
+    """
+    
+    try:
+        driver = st.session_state.graph_rag.driver
+        with driver.session() as session:
+            records = [dict(r) for r in session.run(cypher, states=abbrs)]
+    except:
+        return []
+    
+    if not records:
+        return []
+    
+    results = []
+    for r in records:
+        if r.get("periods") and r.get("labor"):
+            results.append({
+                "label": r["label"],
+                "periods": r["periods"],
+                "labor": r["labor"],
+                "living": r["living"]
+            })
+    
+    return results
+
+
 def fetch_ranked_data(question: str) -> list:
     """HYBRID approach: LLM generates Cypher first, validated, with hardcoded fallback.
     
@@ -1247,6 +1312,9 @@ def generate_response(question: str) -> dict:
             
             if chart_type == "LINE_TREND":
                 data = fetch_trend_data(resolved_question)
+                if not data:
+                    # Fallback: try state-level trend using representative counties
+                    data = _fetch_state_trend_compare(resolved_question)
                 if data:
                     chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
                     chart_error += f", OK: {len(data)} locations"
