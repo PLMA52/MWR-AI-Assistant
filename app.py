@@ -134,6 +134,14 @@ st.markdown("""
     .stDeployButton {display: none;}
     [data-testid="stToolbar"] {display: none;}
     
+    /* Hide Streamlit Cloud bottom-right badge */
+    [data-testid="manage-app-button"] {display: none;}
+    .viewerBadge_container__r5tak {display: none;}
+    .stApp [data-testid="stBottomBlockContainer"] iframe {display: none;}
+    ._profileContainer_gzau3_53 {display: none;}
+    #manage-app-button {display: none;}
+    ._container_gzau3_1 {display: none;}
+    
     /* Chat styling */
     .stChatMessage {
         padding: 10px;
@@ -1455,11 +1463,11 @@ with st.sidebar:
     - **Follow-up questions!** 🧠
     
     **Data Sources:**
-    - Neo4j MWR Database
-    - Census Bureau (ACS)
+    - Bureau of Labor Statistics (BLS)
+    - U.S. Census Bureau (ACS)
     - ERI Economic Research
-    - BLS Unemployment Data
-    - Tavily Web Search
+    - Minimum Wage Legislation
+    - Web Search (latest news)
     
     **Memory:**
     The assistant remembers your 
