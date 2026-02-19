@@ -118,7 +118,7 @@ st.set_page_config(
     page_title="MWR AI Assistant",
     page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="auto"
 )
 
 # ============================================================
@@ -129,7 +129,6 @@ st.markdown("""
     /* Hide Streamlit branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
     
     /* Chat styling */
     .stChatMessage {
@@ -888,14 +887,14 @@ def create_bar_chart(trend_data: list, question: str) -> go.Figure:
     fig = go.Figure()
     if metric_type in ["labor", "both", "risk"]:
         fig.add_trace(go.Bar(x=labels, y=labor_values, name="Cost of Labor",
-            marker_color=[CHART_COLORS[i % len(CHART_COLORS)] for i in range(len(labels))] if metric_type == "labor" else [CHART_COLORS[0]] * len(labels),
+            marker_color=[CHART_COLORS[i % len(CHART_COLORS)] for i in range(len(labels))],
             text=[f"{v:.1f}" for v in labor_values], textposition='outside',
             textfont=dict(size=14, color='#333333', family='Arial Black'),
             hovertemplate='<b>%{x}</b><br>Cost of Labor: %{y:.1f}<br>vs National Avg: %{customdata:+.1f}<extra></extra>',
             customdata=[v - 100 for v in labor_values]))
     if metric_type in ["living", "both"]:
         fig.add_trace(go.Bar(x=labels, y=living_values, name="Cost of Living",
-            marker_color=[CHART_COLORS[(i+1) % len(CHART_COLORS)] for i in range(len(labels))] if metric_type == "living" else [CHART_COLORS[1]] * len(labels),
+            marker_color=[CHART_COLORS[(i + len(labels)) % len(CHART_COLORS)] for i in range(len(labels))],
             text=[f"{v:.1f}" for v in living_values], textposition='outside',
             textfont=dict(size=14, color='#333333', family='Arial Black'),
             hovertemplate='<b>%{x}</b><br>Cost of Living: %{y:.1f}<br>vs National Avg: %{customdata:+.1f}<extra></extra>',
