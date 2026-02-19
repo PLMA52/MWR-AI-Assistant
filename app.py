@@ -506,7 +506,7 @@ def detect_metric_type(question: str) -> str:
 # ============================================================
 
 def fetch_trend_data(question: str) -> list:
-    """Fetch ERI time-series data from Neo4j for line charts"""
+    """Fetch ERI time-series data from Neo4j for line charts and bar comparisons"""
     cypher_prompt = ChatPromptTemplate.from_messages([
         ("system", """Generate a Neo4j Cypher query to fetch ERI time-series data.
 The ZipCode nodes have these properties:
@@ -516,12 +516,24 @@ The ZipCode nodes have these properties:
 - county: county name (e.g., 'San Francisco')
 - state: state abbreviation (e.g., 'CA')
 
+State nodes have: name (full name like 'New York'), abbr (like 'NY')
+Relationships: (ZipCode)-[:IN_STATE]->(State)
+
 CRITICAL RULES:
 1. Always use DISTINCT to avoid duplicate rows
 2. Always include: AND z.eri_periods IS NOT NULL
 3. For a SINGLE county query, use LIMIT 1
 4. For state-level queries, return max 5 representative counties (use LIMIT 5)
 5. Return fields AS: county, state, periods, labor, living
+
+IMPORTANT — STATE vs COUNTY detection:
+- If the user mentions US STATES (like "New York", "California", "Texas", "Maryland"), 
+  pick ONE representative county per state (the most populated or capital county).
+  Use the state abbreviation to filter: z.state = 'NY', z.state = 'CA', etc.
+- If the user mentions COUNTIES or CITIES (like "San Francisco", "Los Angeles", "Boulder"), 
+  use the county name directly.
+- "Compare New York and California" means compare NY STATE vs CA STATE, 
+  NOT counties named "New York" within NY state.
 
 Examples:
 - "trend in San Francisco" → 
@@ -532,6 +544,20 @@ Examples:
   MATCH (z:ZipCode) WHERE z.county IN ['San Francisco', 'Los Angeles'] AND z.state = 'CA' AND z.eri_periods IS NOT NULL 
   WITH DISTINCT z.county AS county, z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living 
   RETURN county, state, periods, labor, living
+
+- "compare New York and California" → 
+  MATCH (z:ZipCode) WHERE z.state IN ['NY', 'CA'] AND z.eri_periods IS NOT NULL 
+  WITH z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living 
+  WITH state, head(collect(periods)) AS periods, head(collect(labor)) AS labor, head(collect(living)) AS living 
+  MATCH (s:State {abbr: state}) 
+  RETURN s.name AS county, state, periods, labor, living
+
+- "compare Maryland and Virginia" → 
+  MATCH (z:ZipCode) WHERE z.state IN ['MD', 'VA'] AND z.eri_periods IS NOT NULL 
+  WITH z.state AS state, z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living 
+  WITH state, head(collect(periods)) AS periods, head(collect(labor)) AS labor, head(collect(living)) AS living 
+  MATCH (s:State {abbr: state}) 
+  RETURN s.name AS county, state, periods, labor, living
 
 Return ONLY the Cypher query, nothing else."""),
         ("human", "{question}")
