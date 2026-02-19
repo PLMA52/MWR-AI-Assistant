@@ -1,12 +1,14 @@
 """
-MWR AI Chat - Streamlit Interface with Session Memory
-Embedded chat for Power BI dashboard
+MWR AI Chat - Streamlit Interface with Session Memory & Cross-Session Memory
+Secured with user authentication and persistent conversation memory
 """
 
 import streamlit as st
 import os
 import json
 import re
+import hashlib
+from datetime import datetime
 from dotenv import load_dotenv
 from neo4j_graphrag import MWRGraphRAG
 from tavily import TavilyClient
@@ -17,6 +19,97 @@ import plotly.graph_objects as go
 
 # Load environment variables
 load_dotenv(override=True)
+
+# ============================================================
+# USER CREDENTIALS — Admin-controlled access codes
+# ============================================================
+# Michel can add/remove/change codes here at any time.
+# Format: "access_code": {"name": "Display Name", "role": "admin|user"}
+# Codes are hashed for security — the raw code never appears in the file.
+
+def hash_code(code: str) -> str:
+    """Hash an access code for secure storage"""
+    return hashlib.sha256(code.encode()).hexdigest()
+
+# To add a new user:  
+#   1. Pick an access code (e.g., "MWR-DG2026")
+#   2. Run: python -c "import hashlib; print(hashlib.sha256('MWR-DG2026'.encode()).hexdigest())"
+#   3. Add the hash below with the user's name
+# To revoke access: simply delete or comment out the user's line
+
+AUTHORIZED_USERS = {
+    hash_code(os.getenv("MWR_ADMIN_CODE", "MWR-ADMIN-2026")): {"name": "Michel Pierre-Louis", "role": "admin"},
+    hash_code(os.getenv("MWR_DAN_CODE", "MWR-DAN-2026")): {"name": "Dan Green", "role": "user"},
+    hash_code(os.getenv("MWR_RENEE_CODE", "MWR-RENEE-2026")): {"name": "Renee", "role": "user"},
+}
+
+# ============================================================
+# CROSS-SESSION MEMORY — Neo4j Persistence
+# ============================================================
+MAX_CROSS_SESSION_SUMMARIES = 5  # Keep last 5 session summaries for context
+
+def save_session_summary(driver, user_name: str, summary: str):
+    """Save a conversation summary to Neo4j for cross-session memory"""
+    try:
+        with driver.session() as session:
+            session.run("""
+                MERGE (u:MWRUser {name: $user_name})
+                CREATE (s:SessionSummary {
+                    summary: $summary,
+                    timestamp: datetime(),
+                    date: $date
+                })
+                CREATE (u)-[:HAD_SESSION]->(s)
+            """, user_name=user_name, summary=summary, date=datetime.now().strftime("%Y-%m-%d %H:%M"))
+    except Exception as e:
+        pass  # Silent fail — don't break the app if memory save fails
+
+def load_session_summaries(driver, user_name: str) -> str:
+    """Load past session summaries from Neo4j for context"""
+    try:
+        with driver.session() as session:
+            result = session.run("""
+                MATCH (u:MWRUser {name: $user_name})-[:HAD_SESSION]->(s:SessionSummary)
+                RETURN s.summary AS summary, s.date AS date
+                ORDER BY s.timestamp DESC
+                LIMIT $limit
+            """, user_name=user_name, limit=MAX_CROSS_SESSION_SUMMARIES)
+            
+            summaries = []
+            for record in result:
+                summaries.append(f"[{record['date']}] {record['summary']}")
+            
+            if summaries:
+                summaries.reverse()  # Chronological order
+                return "\n".join(summaries)
+            return ""
+    except:
+        return ""
+
+def generate_session_summary(llm, conversation_history: list) -> str:
+    """Use LLM to generate a concise summary of the current session"""
+    if len(conversation_history) < 2:
+        return ""
+    
+    # Build conversation text
+    conv_text = ""
+    for msg in conversation_history[-20:]:  # Last 10 exchanges max
+        role = "User" if msg["role"] == "user" else "Assistant"
+        content = msg["content"][:300]
+        conv_text += f"{role}: {content}\n"
+    
+    try:
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """Summarize this MWR AI Assistant conversation in 2-3 sentences. 
+Focus on: what locations/topics were discussed, key data points mentioned, and any decisions or insights.
+Keep it concise — this summary will be used to provide context in future sessions.
+Return ONLY the summary, nothing else."""),
+            ("human", "{conversation}")
+        ])
+        chain = prompt | llm | StrOutputParser()
+        return chain.invoke({"conversation": conv_text}).strip()
+    except:
+        return ""
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -73,7 +166,46 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# INITIALIZE SESSION STATE
+# AUTHENTICATION GATE
+# ============================================================
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+    st.session_state.user_name = ""
+    st.session_state.user_role = ""
+
+if not st.session_state.authenticated:
+    st.markdown("""
+    <div style='text-align: center; padding: 60px 20px;'>
+        <h1 style='color: #1B4F5C; font-family: Arial;'>🔒 MWR AI Assistant</h1>
+        <p style='color: #666; font-size: 16px;'>Sodexo Workforce Market Intelligence</p>
+        <hr style='width: 200px; margin: 20px auto;'>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col_left, col_center, col_right = st.columns([1, 2, 1])
+    with col_center:
+        with st.form("login_form"):
+            name_input = st.text_input("Your Name", placeholder="Enter your name")
+            code_input = st.text_input("Access Code", type="password", placeholder="Enter your access code")
+            submitted = st.form_submit_button("🔑 Sign In", use_container_width=True)
+            
+            if submitted:
+                if name_input and code_input:
+                    code_hash = hash_code(code_input)
+                    if code_hash in AUTHORIZED_USERS:
+                        st.session_state.authenticated = True
+                        st.session_state.user_name = AUTHORIZED_USERS[code_hash]["name"]
+                        st.session_state.user_role = AUTHORIZED_USERS[code_hash]["role"]
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid access code. Contact Michel for access.")
+                else:
+                    st.warning("Please enter both your name and access code.")
+    
+    st.stop()  # Block everything below until authenticated
+
+# ============================================================
+# INITIALIZE SESSION STATE (only after authentication)
 # ============================================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -97,6 +229,17 @@ if "graph_rag" not in st.session_state:
                 max_tokens=4096
             )
             st.session_state.connected = True
+            
+            # Load cross-session memory for the authenticated user
+            if "cross_session_loaded" not in st.session_state:
+                past_context = load_session_summaries(
+                    st.session_state.graph_rag.driver,
+                    st.session_state.user_name
+                )
+                st.session_state.cross_session_context = past_context
+                st.session_state.cross_session_loaded = True
+                st.session_state.session_saved = False  # Track if we've saved this session
+                
         except Exception as e:
             st.session_state.connected = False
             st.error(f"❌ Connection failed: {e}")
@@ -107,21 +250,25 @@ if "graph_rag" not in st.session_state:
 MAX_MEMORY_TURNS = 10  # Keep last 10 exchanges (20 messages) for context
 
 def get_conversation_context() -> str:
-    """Build conversation context string from recent history"""
-    if not st.session_state.conversation_history:
-        return ""
+    """Build conversation context string from recent history AND cross-session memory"""
+    parts = []
     
-    # Take last MAX_MEMORY_TURNS exchanges
-    recent = st.session_state.conversation_history[-(MAX_MEMORY_TURNS * 2):]
+    # Include cross-session memory if available
+    cross_session = st.session_state.get("cross_session_context", "")
+    if cross_session:
+        parts.append(f"Previous Sessions:\n{cross_session}")
     
-    context_lines = []
-    for msg in recent:
-        role = "User" if msg["role"] == "user" else "Assistant"
-        # Truncate long responses to keep context manageable
-        content = msg["content"][:500] if len(msg["content"]) > 500 else msg["content"]
-        context_lines.append(f"{role}: {content}")
+    # Include current session history
+    if st.session_state.conversation_history:
+        recent = st.session_state.conversation_history[-(MAX_MEMORY_TURNS * 2):]
+        context_lines = []
+        for msg in recent:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            content = msg["content"][:500] if len(msg["content"]) > 500 else msg["content"]
+            context_lines.append(f"{role}: {content}")
+        parts.append(f"Current Session:\n" + "\n".join(context_lines))
     
-    return "\n".join(context_lines)
+    return "\n\n".join(parts) if parts else ""
 
 def resolve_follow_up(question: str) -> str:
     """
@@ -1147,16 +1294,24 @@ def process_question(question: str):
 # ============================================================
 # MAIN UI
 # ============================================================
-# Title with memory indicator
+# Title with user name and memory indicator
 num_turns = len(st.session_state.conversation_history) // 2
+has_cross_memory = bool(st.session_state.get("cross_session_context", ""))
+memory_parts = []
 if num_turns > 0:
+    memory_parts.append(f"🧠 {num_turns} exchanges")
+if has_cross_memory:
+    memory_parts.append("📚 Past sessions loaded")
+memory_html = " · ".join(memory_parts)
+
+if memory_parts:
     st.markdown(
-        f'<p class="main-title">🤖 MWR AI Assistant '
-        f'<span class="memory-badge">🧠 {num_turns} exchanges remembered</span></p>',
+        f'<p class="main-title">🤖 MWR AI Assistant — Welcome, {st.session_state.user_name} '
+        f'<span class="memory-badge">{memory_html}</span></p>',
         unsafe_allow_html=True
     )
 else:
-    st.markdown('<p class="main-title">🤖 MWR AI Assistant</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="main-title">🤖 MWR AI Assistant — Welcome, {st.session_state.user_name}</p>', unsafe_allow_html=True)
 
 # Connection status
 if st.session_state.get("connected"):
@@ -1257,6 +1412,11 @@ if prompt := st.chat_input("Ask me anything about Minimum Wage Risk..."):
 # SIDEBAR
 # ============================================================
 with st.sidebar:
+    st.markdown(f"### 👤 {st.session_state.user_name}")
+    st.caption(f"Role: {st.session_state.user_role.title()}")
+    
+    st.divider()
+    
     st.markdown("### ℹ️ About")
     st.markdown("""
     **MWR AI Assistant** helps you analyze 
@@ -1280,30 +1440,109 @@ with st.sidebar:
     - BLS Unemployment Data
     - Tavily Web Search
     
-    **Session Memory:**
+    **Memory:**
     The assistant remembers your 
-    conversation in this session.
-    Ask follow-ups naturally!
+    conversation in this session AND
+    across sessions! 🧠📚
     """)
     
     st.divider()
     
     # Memory stats
     turns = len(st.session_state.conversation_history) // 2
-    st.markdown(f"🧠 **Memory:** {turns} exchanges")
+    st.markdown(f"🧠 **Session Memory:** {turns} exchanges")
     st.markdown(f"📊 **Max Memory:** {MAX_MEMORY_TURNS} exchanges")
+    if st.session_state.get("cross_session_context"):
+        st.markdown("📚 **Past Sessions:** Loaded ✅")
+    else:
+        st.markdown("📚 **Past Sessions:** None yet")
     
-    if st.button("🗑️ Clear Chat & Memory"):
+    st.divider()
+    
+    # Save session button — saves current conversation to Neo4j for future sessions
+    if turns >= 2 and not st.session_state.get("session_saved", False):
+        if st.button("💾 Save Session Memory", use_container_width=True):
+            with st.spinner("Saving..."):
+                summary = generate_session_summary(
+                    st.session_state.llm,
+                    st.session_state.conversation_history
+                )
+                if summary:
+                    save_session_summary(
+                        st.session_state.graph_rag.driver,
+                        st.session_state.user_name,
+                        summary
+                    )
+                    st.session_state.session_saved = True
+                    st.success("✅ Session saved! I'll remember this next time.")
+                else:
+                    st.warning("Not enough conversation to save.")
+    elif st.session_state.get("session_saved"):
+        st.success("✅ Session saved")
+    
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        # Auto-save before clearing if there's meaningful conversation
+        if turns >= 2 and not st.session_state.get("session_saved", False):
+            summary = generate_session_summary(
+                st.session_state.llm,
+                st.session_state.conversation_history
+            )
+            if summary:
+                save_session_summary(
+                    st.session_state.graph_rag.driver,
+                    st.session_state.user_name,
+                    summary
+                )
         st.session_state.messages = []
         st.session_state.conversation_history = []
         st.session_state.pending_question = None
+        st.session_state.session_saved = False
         st.rerun()
     
-    # Developer debug (hidden from main chat)
-    st.divider()
-    st.markdown("**🔧 Debug (dev only)**")
-    st.caption(st.session_state.get("_chart_debug", "—"))
-    st.caption(st.session_state.get("_rank_debug", "—"))
-    rank_cypher = st.session_state.get("_rank_cypher", "")
-    if rank_cypher:
-        st.code(rank_cypher[:200], language="cypher")
+    if st.button("🚪 Logout", use_container_width=True):
+        # Auto-save before logout if there's meaningful conversation
+        if turns >= 2 and not st.session_state.get("session_saved", False):
+            summary = generate_session_summary(
+                st.session_state.llm,
+                st.session_state.conversation_history
+            )
+            if summary:
+                save_session_summary(
+                    st.session_state.graph_rag.driver,
+                    st.session_state.user_name,
+                    summary
+                )
+        # Clear everything
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+    
+    # Admin panel — only visible to admin users
+    if st.session_state.user_role == "admin":
+        st.divider()
+        st.markdown("### 🔧 Admin Panel")
+        
+        # Show active users
+        if st.button("👥 View Active Users", use_container_width=True):
+            try:
+                driver = st.session_state.graph_rag.driver
+                with driver.session() as sess:
+                    result = sess.run("""
+                        MATCH (u:MWRUser)-[:HAD_SESSION]->(s:SessionSummary)
+                        RETURN u.name AS user, count(s) AS sessions, 
+                               max(s.date) AS last_active
+                        ORDER BY last_active DESC
+                    """)
+                    for record in result:
+                        st.caption(f"**{record['user']}** — {record['sessions']} sessions, last: {record['last_active']}")
+            except:
+                st.caption("No session data yet.")
+        
+        # Debug info
+        st.divider()
+        st.markdown("**🔧 Debug (dev only)**")
+        st.caption(st.session_state.get("_chart_debug", "—"))
+        st.caption(st.session_state.get("_rank_debug", "—"))
+        rank_cypher = st.session_state.get("_rank_cypher", "")
+        if rank_cypher:
+            st.code(rank_cypher[:200], language="cypher")
