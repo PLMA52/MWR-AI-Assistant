@@ -727,6 +727,99 @@ def _fetch_state_trend_compare(question: str) -> list:
     return results
 
 
+def _fetch_county_trend_fallback(question: str) -> list:
+    """Fallback for LINE_TREND when LLM Cypher fails for county/city queries.
+    Uses fuzzy matching on common city/county names."""
+    
+    # Common city-to-county mappings and direct county names
+    county_keywords = {
+        'san francisco': ('San Francisco', 'CA'),
+        'los angeles': ('Los Angeles', 'CA'),
+        'san diego': ('San Diego', 'CA'),
+        'boulder': ('Boulder', 'CO'),
+        'denver': ('Denver', 'CO'),
+        'montgomery county': ('Montgomery', 'MD'),
+        'fairfax': ('Fairfax', 'VA'),
+        'arlington': ('Arlington', 'VA'),
+        'howard': ('Howard', 'MD'),
+        'miami': ('Miami-Dade', 'FL'),
+        'cook county': ('Cook', 'IL'),
+        'chicago': ('Cook', 'IL'),
+        'harris county': ('Harris', 'TX'),
+        'houston': ('Harris', 'TX'),
+        'king county': ('King', 'WA'),
+        'seattle': ('King', 'WA'),
+        'new york county': ('New York', 'NY'),
+        'manhattan': ('New York', 'NY'),
+        'brooklyn': ('Kings', 'NY'),
+        'queens': ('Queens', 'NY'),
+        'bronx': ('Bronx', 'NY'),
+        'dallas': ('Dallas', 'TX'),
+        'austin': ('Travis', 'TX'),
+        'phoenix': ('Maricopa', 'AZ'),
+        'anne arundel': ('Anne Arundel', 'MD'),
+        'prince george': ("Prince George's", 'MD'),
+        'alameda': ('Alameda', 'CA'),
+    }
+    
+    q_lower = question.lower()
+    found_counties = []
+    
+    for keyword, (county, state) in sorted(county_keywords.items(), key=lambda x: -len(x[0])):
+        if keyword in q_lower:
+            found_counties.append((county, state))
+    
+    if not found_counties:
+        # Try a broader approach: search for any word that might be a county
+        # This is a last resort — query Neo4j directly with a CONTAINS match
+        words = re.findall(r'[A-Z][a-z]+(?:\s[A-Z][a-z]+)*', question)
+        for word in words:
+            if word.lower() not in ['cost', 'labor', 'living', 'trend', 'compare', 'show', 'what', 'how', 'the']:
+                try:
+                    driver = st.session_state.graph_rag.driver
+                    with driver.session() as session:
+                        result = session.run("""
+                            MATCH (z:ZipCode) WHERE z.county = $county AND z.eri_periods IS NOT NULL
+                            RETURN DISTINCT z.county AS county, z.state AS state LIMIT 1
+                        """, county=word)
+                        record = result.single()
+                        if record:
+                            found_counties.append((record['county'], record['state']))
+                            break
+                except:
+                    continue
+    
+    if not found_counties:
+        return []
+    
+    results = []
+    driver = st.session_state.graph_rag.driver
+    
+    for county, state in found_counties[:5]:
+        cypher = """
+        MATCH (z:ZipCode) WHERE z.county = $county AND z.state = $state AND z.eri_periods IS NOT NULL
+        RETURN z.county AS county, z.state AS state, z.eri_periods AS periods, 
+               z.eri_labor_history AS labor, z.eri_living_history AS living
+        LIMIT 1
+        """
+        try:
+            with driver.session() as session:
+                records = [dict(r) for r in session.run(cypher, county=county, state=state)]
+            if records:
+                r = records[0]
+                if r.get("periods") and r.get("labor"):
+                    results.append({
+                        "label": f"{r['county']}, {r['state']}",
+                        "periods": r["periods"],
+                        "labor": r["labor"],
+                        "living": r["living"]
+                    })
+        except:
+            continue
+    
+    return results
+
+
 def fetch_ranked_data(question: str) -> list:
     """HYBRID approach: LLM generates Cypher first, validated, with hardcoded fallback.
     
@@ -1322,19 +1415,22 @@ def generate_response(question: str) -> dict:
             chart_error = f"type={chart_type}"
             
             # Safety override: "compare trend" should be LINE_TREND, not BAR_COMPARE
+            # ONLY fires when the word "trend" (or equivalent) is explicitly in the question
             if chart_type == "BAR_COMPARE":
                 q_check = resolved_question.lower()
-                has_trend_word = any(kw in q_check for kw in ['trend', 'over time', 'historical', 'history', 'trajectory'])
-                has_eri_cost = any(kw in q_check for kw in ['cost of labor', 'cost of living', 'eri', 'labor cost', 'living cost'])
-                if has_trend_word and has_eri_cost:
+                has_trend_word = any(kw in q_check for kw in ['trend', 'over time', 'historical', 'history', 'trajectory', 'changed over'])
+                if has_trend_word:
                     chart_type = "LINE_TREND"
                     chart_error = f"type=LINE_TREND (overridden from BAR_COMPARE — trend detected)"
             
             if chart_type == "LINE_TREND":
                 data = fetch_trend_data(resolved_question)
                 if not data:
-                    # Fallback: try state-level trend using representative counties
+                    # Fallback 1: try state-level trend using representative counties
                     data = _fetch_state_trend_compare(resolved_question)
+                if not data:
+                    # Fallback 2: try county-level trend using known county mappings
+                    data = _fetch_county_trend_fallback(resolved_question)
                 if data:
                     chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
                     chart_error += f", OK: {len(data)} locations"
@@ -1375,6 +1471,31 @@ def generate_response(question: str) -> dict:
     q_type = classify_question(resolved_question)
     
     context_parts = []
+    
+    # If chart data was successfully retrieved, inject it into context so the LLM narrative matches
+    if chart_data is not None:
+        cd = chart_data
+        if cd["chart_type"] == "LINE_TREND" and cd["data"]:
+            trend_summary_parts = []
+            metric = detect_metric_type(resolved_question)
+            for loc in cd["data"]:
+                vals = loc.get("living" if metric == "living" else "labor", [])
+                if vals:
+                    valid = [v for v in vals if v > 0]
+                    if valid:
+                        trend_summary_parts.append(
+                            f"- {loc['label']}: ERI {'Cost of Living' if metric == 'living' else 'Cost of Labor'} "
+                            f"ranges from {min(valid):.1f} to {max(valid):.1f} over {len(valid)} periods "
+                            f"(May 2024 to Jan 2026). Latest: {valid[-1]:.1f}, National avg = 100."
+                        )
+            if trend_summary_parts:
+                context_parts.append(
+                    "**Chart Data Successfully Retrieved (trend comparison):**\n"
+                    "The interactive chart below shows the full time-series. Key data points:\n"
+                    + "\n".join(trend_summary_parts)
+                    + "\n\nIMPORTANT: The chart IS displaying successfully. Do NOT say data is missing or there was an error. "
+                    "Provide business analysis of the trends shown."
+                )
     
     # Get database results if needed
     if q_type in ["DATABASE", "BOTH"]:
