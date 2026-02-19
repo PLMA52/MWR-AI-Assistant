@@ -1381,6 +1381,21 @@ def generate_response(question: str) -> dict:
                     st.session_state["_trend_unavailable"] = True
                     chart_failed_reason = "trend_unavailable"
             
+            # Reverse guard: LINE_TREND chosen but NO trend word in question?
+            # If user is comparing locations without asking for trends, use BAR_COMPARE instead
+            if chart_type == "LINE_TREND":
+                q_check = resolved_question.lower()
+                has_trend_word = any(kw in q_check for kw in [
+                    'trend', 'over time', 'historical', 'history', 'trajectory', 
+                    'changed over', 'evolve', 'how has', 'movement'
+                ])
+                has_compare_signal = any(kw in q_check for kw in [
+                    'compare', 'comparison', 'versus', ' vs ', ' vs.', 'between'
+                ])
+                if not has_trend_word and has_compare_signal:
+                    chart_type = "BAR_COMPARE"
+                    chart_error = f"type=BAR_COMPARE (downgraded from LINE_TREND — no trend word, comparison detected)"
+            
             # Also catch when classifier correctly returns NONE for non-ERI trend requests
             # (e.g. "unemployment trend" — classifier learned to return NONE, but user still expects feedback)
             if chart_type == "NONE" and not chart_failed_reason:
