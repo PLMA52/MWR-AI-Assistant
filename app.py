@@ -461,7 +461,10 @@ Examples:
 - "cost of labor trend in SF" → LINE_TREND
 - "how has cost of living changed over time" → LINE_TREND
 - "ERI trend in Maryland" → LINE_TREND
-- "compare cost of labor NY vs MD" → BAR_COMPARE
+- "compare the trend of cost of living between Maryland and New York" → LINE_TREND (trend + cost = LINE_TREND, even with "compare")
+- "compare cost of labor trend NY vs CA" → LINE_TREND (trend comparison = time-series overlay)
+- "show me the cost of living trend for Maryland and Virginia" → LINE_TREND
+- "compare cost of labor NY vs MD" → BAR_COMPARE (no "trend" word = current snapshot comparison)
 - "compare cost of living in San Francisco vs Los Angeles vs San Diego" → BAR_COMPARE
 - "what is California's risk?" → NONE
 - "unemployment trend in Montgomery County" → NONE (no time-series for unemployment)
@@ -469,6 +472,9 @@ Examples:
 - "education breakdown in SF" → NONE
 - "how many critical ZIP codes" → NONE
 - "what are the latest minimum wage news" → NONE
+
+IMPORTANT: If the question mentions BOTH "compare" AND "trend" for cost of labor or cost of living → always return LINE_TREND (not BAR_COMPARE).
+The word "trend" is the deciding factor — it means the user wants to see change over time, not just current values.
 
 Return ONLY one word: LINE_TREND, BAR_COMPARE, HBAR_RANK, or NONE"""),
         ("human", "{question}")
@@ -683,14 +689,19 @@ def _fetch_state_trend_compare(question: str) -> list:
     abbrs = [s[1] for s in found_states[:5]]
     
     # For each state, pick the representative county (most ZIP codes = most data)
+    # Two-step: first find best county per state, then get one ZIP's trend data from it
     cypher = """
     MATCH (z:ZipCode) WHERE z.state IN $states AND z.eri_periods IS NOT NULL
-    WITH z.state AS st, z.county AS county, z.eri_periods AS periods, 
-         z.eri_labor_history AS labor, z.eri_living_history AS living, count(*) AS zip_count
-    ORDER BY zip_count DESC
-    WITH st, head(collect({county: county, periods: periods, labor: labor, living: living})) AS rep
+    WITH z.state AS st, z.county AS county, count(z) AS zip_count
+    ORDER BY st, zip_count DESC
+    WITH st, collect(county)[0] AS top_county
+    MATCH (z2:ZipCode) WHERE z2.state = st AND z2.county = top_county AND z2.eri_periods IS NOT NULL
+    WITH st, top_county, 
+         head(collect(z2.eri_periods)) AS periods,
+         head(collect(z2.eri_labor_history)) AS labor,
+         head(collect(z2.eri_living_history)) AS living
     MATCH (s:State {abbr: st})
-    RETURN s.name AS label, st AS state, rep.periods AS periods, rep.labor AS labor, rep.living AS living
+    RETURN s.name AS label, st AS state, periods, labor, living
     """
     
     try:
@@ -1309,6 +1320,15 @@ def generate_response(question: str) -> dict:
                     chart_type = "HBAR_RANK"
             
             chart_error = f"type={chart_type}"
+            
+            # Safety override: "compare trend" should be LINE_TREND, not BAR_COMPARE
+            if chart_type == "BAR_COMPARE":
+                q_check = resolved_question.lower()
+                has_trend_word = any(kw in q_check for kw in ['trend', 'over time', 'historical', 'history', 'trajectory'])
+                has_eri_cost = any(kw in q_check for kw in ['cost of labor', 'cost of living', 'eri', 'labor cost', 'living cost'])
+                if has_trend_word and has_eri_cost:
+                    chart_type = "LINE_TREND"
+                    chart_error = f"type=LINE_TREND (overridden from BAR_COMPARE — trend detected)"
             
             if chart_type == "LINE_TREND":
                 data = fetch_trend_data(resolved_question)
