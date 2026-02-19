@@ -130,6 +130,10 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
+    /* Hide Fork/GitHub badge in top-right but keep sidebar toggle */
+    .stDeployButton {display: none;}
+    [data-testid="stToolbar"] {display: none;}
+    
     /* Chat styling */
     .stChatMessage {
         padding: 10px;
@@ -1404,6 +1408,24 @@ if prompt := st.chat_input("Ask me anything about Minimum Wage Risk..."):
     st.session_state.conversation_history.append({"role": "user", "content": prompt})
     st.session_state.conversation_history.append({"role": "assistant", "content": response["text"]})
     
+    # AUTO-SAVE: Save session memory every 3 exchanges (silent, no user action needed)
+    num_exchanges = len(st.session_state.conversation_history) // 2
+    if num_exchanges >= 3 and num_exchanges % 3 == 0 and not st.session_state.get("session_saved", False):
+        try:
+            summary = generate_session_summary(
+                st.session_state.llm,
+                st.session_state.conversation_history
+            )
+            if summary:
+                save_session_summary(
+                    st.session_state.graph_rag.driver,
+                    st.session_state.user_name,
+                    summary
+                )
+                st.session_state.session_saved = True
+        except:
+            pass  # Silent fail — never interrupt the user
+    
     # Rerun to update memory badge
     st.rerun()
 
@@ -1458,26 +1480,33 @@ with st.sidebar:
     
     st.divider()
     
-    # Save session button — saves current conversation to Neo4j for future sessions
-    if turns >= 2 and not st.session_state.get("session_saved", False):
-        if st.button("💾 Save Session Memory", use_container_width=True):
-            with st.spinner("Saving..."):
-                summary = generate_session_summary(
-                    st.session_state.llm,
-                    st.session_state.conversation_history
-                )
-                if summary:
-                    save_session_summary(
-                        st.session_state.graph_rag.driver,
-                        st.session_state.user_name,
-                        summary
+    # Auto-save indicator for all users
+    if st.session_state.get("session_saved"):
+        st.caption("✅ Session auto-saved")
+    elif turns >= 2:
+        st.caption("💾 Session will auto-save at 3 exchanges")
+    
+    # Manual save button — admin only
+    if st.session_state.user_role == "admin":
+        if turns >= 2 and not st.session_state.get("session_saved", False):
+            if st.button("💾 Save Session Memory", use_container_width=True):
+                with st.spinner("Saving..."):
+                    summary = generate_session_summary(
+                        st.session_state.llm,
+                        st.session_state.conversation_history
                     )
-                    st.session_state.session_saved = True
-                    st.success("✅ Session saved! I'll remember this next time.")
-                else:
-                    st.warning("Not enough conversation to save.")
-    elif st.session_state.get("session_saved"):
-        st.success("✅ Session saved")
+                    if summary:
+                        save_session_summary(
+                            st.session_state.graph_rag.driver,
+                            st.session_state.user_name,
+                            summary
+                        )
+                        st.session_state.session_saved = True
+                        st.success("✅ Session saved! I'll remember this next time.")
+                    else:
+                        st.warning("Not enough conversation to save.")
+        elif st.session_state.get("session_saved"):
+            st.success("✅ Session saved")
     
     if st.button("🗑️ Clear Chat", use_container_width=True):
         # Auto-save before clearing if there's meaningful conversation
