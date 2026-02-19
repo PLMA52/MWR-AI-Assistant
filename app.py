@@ -131,16 +131,27 @@ st.markdown("""
     footer {visibility: hidden;}
     
     /* Hide Fork/GitHub badge in top-right but keep sidebar toggle */
-    .stDeployButton {display: none;}
-    [data-testid="stToolbar"] {display: none;}
+    .stDeployButton {display: none !important;}
+    [data-testid="stToolbar"] {display: none !important;}
     
-    /* Hide Streamlit Cloud bottom-right badge */
-    [data-testid="manage-app-button"] {display: none;}
-    .viewerBadge_container__r5tak {display: none;}
-    .stApp [data-testid="stBottomBlockContainer"] iframe {display: none;}
-    ._profileContainer_gzau3_53 {display: none;}
-    #manage-app-button {display: none;}
-    ._container_gzau3_1 {display: none;}
+    /* Hide ALL Streamlit Cloud branding — bottom-right badges, logos, manage button */
+    [data-testid="manage-app-button"] {display: none !important;}
+    .viewerBadge_container__r5tak {display: none !important;}
+    .stApp [data-testid="stBottomBlockContainer"] iframe {display: none !important;}
+    ._profileContainer_gzau3_53 {display: none !important;}
+    #manage-app-button {display: none !important;}
+    ._container_gzau3_1 {display: none !important;}
+    div[data-testid="stStatusWidget"] {display: none !important;}
+    .reportview-container .main footer {display: none !important;}
+    .stApp iframe[height="0"] {display: none !important;}
+    /* Target the colored floating button and Streamlit logo in bottom-right */
+    .st-emotion-cache-czk5ss {display: none !important;}
+    .st-emotion-cache-164nlkn {display: none !important;}
+    .stAppDeployButton {display: none !important;}
+    button[kind="manage"] {display: none !important;}
+    /* Catch-all for any remaining bottom-right fixed elements */
+    .stApp > iframe {display: none !important;}
+    a[href*="streamlit.io"] {display: none !important;}
     
     /* Chat styling */
     .stChatMessage {
