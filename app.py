@@ -757,6 +757,11 @@ def _fetch_county_trend_fallback(question: str) -> list:
         'dallas': ('Dallas', 'TX'),
         'austin': ('Travis', 'TX'),
         'phoenix': ('Maricopa', 'AZ'),
+        'westchester': ('Westchester', 'NY'),
+        'nassau': ('Nassau', 'NY'),
+        'suffolk county': ('Suffolk', 'NY'),
+        'bergen': ('Bergen', 'NJ'),
+        'essex': ('Essex', 'NJ'),
         'anne arundel': ('Anne Arundel', 'MD'),
         'prince george': ("Prince George's", 'MD'),
         'alameda': ('Alameda', 'CA'),
@@ -1441,11 +1446,11 @@ def generate_response(question: str) -> dict:
             if chart_type == "LINE_TREND":
                 data = fetch_trend_data(resolved_question)
                 if not data:
-                    # Fallback 1: try state-level trend using representative counties
-                    data = _fetch_state_trend_compare(resolved_question)
-                if not data:
-                    # Fallback 2: try county-level trend using known county mappings
+                    # Fallback 1: try county-level trend FIRST (handles "Montgomery County vs Westchester County")
                     data = _fetch_county_trend_fallback(resolved_question)
+                if not data:
+                    # Fallback 2: try state-level trend using representative counties
+                    data = _fetch_state_trend_compare(resolved_question)
                 if data:
                     chart_data = {"chart_type": chart_type, "data": data, "question": resolved_question}
                     chart_error += f", OK: {len(data)} locations"
