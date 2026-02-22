@@ -152,6 +152,16 @@ st.markdown("""
     /* Catch-all for any remaining bottom-right fixed elements */
     .stApp > iframe {display: none !important;}
     a[href*="streamlit.io"] {display: none !important;}
+    /* Hide "Relaunch to update" banner at top */
+    [data-testid="stAppViewBlockContainer"] > div:first-child > div[data-testid="stAlert"] {display: none !important;}
+    .stAlert[data-baseweb="notification"] {display: none !important;}
+    /* Nuclear option: hide ALL fixed-position elements from Streamlit in corners */
+    div[class*="StatusWidget"] {display: none !important;}
+    div[class*="manage"] {display: none !important;}
+    button[class*="manage"] {display: none !important;}
+    div[class*="deploy"] {display: none !important;}
+    header[data-testid="stHeader"] {visibility: hidden !important; height: 0 !important;}
+    div[data-testid="stDecoration"] {display: none !important;}
     
     /* Chat styling */
     .stChatMessage {
