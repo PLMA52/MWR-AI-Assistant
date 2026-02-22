@@ -41,6 +41,7 @@ AUTHORIZED_USERS = {
     hash_code(os.getenv("MWR_ADMIN_CODE", "MWR-ADMIN-2026")): {"name": "Michel Pierre-Louis", "role": "admin"},
     hash_code(os.getenv("MWR_DAN_CODE", "MWR-DAN-2026")): {"name": "Dan Green", "role": "user"},
     hash_code(os.getenv("MWR_RENEE_CODE", "MWR-RENEE-2026")): {"name": "Renee", "role": "user"},
+    hash_code(os.getenv("MWR_DANM_CODE", "MWR-DANM-2026")): {"name": "Dan More", "role": "user"},
 }
 
 # ============================================================
