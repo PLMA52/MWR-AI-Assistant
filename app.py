@@ -669,8 +669,7 @@ def _fetch_state_bar_compare(question: str) -> list:
 
 
 def _fetch_state_trend_compare(question: str) -> list:
-    """Fallback for LINE_TREND: pick one representative county per state and return its time-series.
-    Uses the county with the most ZIP codes as the representative for each state."""
+    """Fallback for LINE_TREND: compute state-level average trends for state-vs-state comparisons."""
     
     # Common state name to abbreviation mapping
     state_map = {
@@ -697,43 +696,54 @@ def _fetch_state_trend_compare(question: str) -> list:
     if not found_states:
         return []
     
-    abbrs = [s[1] for s in found_states[:5]]
-    
-    # For each state, pick the representative county (most ZIP codes = most data)
-    # Two-step: first find best county per state, then get one ZIP's trend data from it
-    cypher = """
-    MATCH (z:ZipCode) WHERE z.state IN $states AND z.eri_periods IS NOT NULL
-    WITH z.state AS st, z.county AS county, count(z) AS zip_count
-    ORDER BY st, zip_count DESC
-    WITH st, collect(county)[0] AS top_county
-    MATCH (z2:ZipCode) WHERE z2.state = st AND z2.county = top_county AND z2.eri_periods IS NOT NULL
-    WITH st, top_county, 
-         head(collect(z2.eri_periods)) AS periods,
-         head(collect(z2.eri_labor_history)) AS labor,
-         head(collect(z2.eri_living_history)) AS living
-    MATCH (s:State {abbr: st})
-    RETURN s.name AS label, st AS state, periods, labor, living
-    """
-    
-    try:
-        driver = st.session_state.graph_rag.driver
-        with driver.session() as session:
-            records = [dict(r) for r in session.run(cypher, states=abbrs)]
-    except:
-        return []
-    
-    if not records:
-        return []
-    
+    driver = st.session_state.graph_rag.driver
     results = []
-    for r in records:
-        if r.get("periods") and r.get("labor"):
-            results.append({
-                "label": r["label"],
-                "periods": r["periods"],
-                "labor": r["labor"],
-                "living": r["living"]
-            })
+    
+    for state_name, abbr in found_states[:5]:
+        try:
+            with driver.session() as session:
+                records = [dict(r) for r in session.run("""
+                    MATCH (z:ZipCode) WHERE z.state = $state AND z.eri_periods IS NOT NULL
+                    WITH z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living
+                    WITH head(collect(periods)) AS periods, collect(labor) AS all_labor, collect(living) AS all_living
+                    WITH periods, 
+                         [i IN range(0, size(periods)-1) | 
+                            round(reduce(s=0.0, arr IN all_labor | s + arr[i]) / size(all_labor), 1)] AS avg_labor,
+                         [i IN range(0, size(periods)-1) | 
+                            round(reduce(s=0.0, arr IN all_living | s + arr[i]) / size(all_living), 1)] AS avg_living
+                    RETURN periods, avg_labor, avg_living
+                """, state=abbr)]
+            if records and records[0].get("periods"):
+                r = records[0]
+                results.append({
+                    "label": state_name.title(),
+                    "periods": r["periods"],
+                    "labor": r["avg_labor"],
+                    "living": r["avg_living"]
+                })
+        except:
+            # Fallback: use representative county
+            try:
+                with driver.session() as session:
+                    records = [dict(r) for r in session.run("""
+                        MATCH (z:ZipCode) WHERE z.state = $state AND z.eri_periods IS NOT NULL
+                        WITH z.county AS county, count(z) AS cnt
+                        ORDER BY cnt DESC LIMIT 1
+                        WITH county
+                        MATCH (z2:ZipCode) WHERE z2.county = county AND z2.state = $state AND z2.eri_periods IS NOT NULL
+                        RETURN z2.eri_periods AS periods, z2.eri_labor_history AS labor, z2.eri_living_history AS living
+                        LIMIT 1
+                    """, state=abbr)]
+                if records and records[0].get("periods"):
+                    r = records[0]
+                    results.append({
+                        "label": state_name.title(),
+                        "periods": r["periods"],
+                        "labor": r["labor"],
+                        "living": r["living"]
+                    })
+            except:
+                continue
     
     return results
 
@@ -1606,6 +1616,11 @@ def generate_response(question: str) -> dict:
             
             if chart_type == "LINE_TREND":
                 data = fetch_trend_data(resolved_question)
+                # Validate: for comparison queries, LLM Cypher must return 2+ results
+                q_check_cmp = resolved_question.lower()
+                is_comparison = any(kw in q_check_cmp for kw in ['compare', ' vs ', ' vs.', 'versus', ' and '])
+                if data and is_comparison and len(data) < 2:
+                    data = []  # Force fallback — LLM returned partial results
                 if not data:
                     # Fallback 0: try county-vs-state comparison (e.g., "Montgomery County vs Maryland")
                     data = _fetch_county_vs_state_trend(resolved_question)
