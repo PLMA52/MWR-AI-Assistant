@@ -422,7 +422,7 @@ PERIOD_LABELS = {
     '2024-11': 'Nov 2024', '2025-01': 'Jan 2025', '2025-02': 'Feb 2025',
     '2025-04': 'Apr 2025', '2025-05': 'May 2025', '2025-07': 'Jul 2025',
     '2025-08': 'Aug 2025', '2025-10': 'Oct 2025', '2025-11': 'Nov 2025',
-    '2026-01': 'Jan 2026'
+    '2026-01': 'Jan 2026', '2026-02': 'Feb 2026'
 }
 
 def should_generate_chart(question: str) -> bool:
@@ -834,6 +834,148 @@ def _fetch_county_trend_fallback(question: str) -> list:
             continue
     
     return results
+
+
+def _fetch_county_vs_state_trend(question: str) -> list:
+    """Handle 'county vs state' trend comparisons.
+    Detects when the question asks to compare a specific county against its parent state.
+    Returns the county's actual trend data + the state's average trend data."""
+    
+    state_map = {
+        'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
+        'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE', 'florida': 'FL', 'georgia': 'GA',
+        'hawaii': 'HI', 'idaho': 'ID', 'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA',
+        'kansas': 'KS', 'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+        'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
+        'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV', 'new hampshire': 'NH',
+        'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC',
+        'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK', 'oregon': 'OR', 'pennsylvania': 'PA',
+        'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD', 'tennessee': 'TN',
+        'texas': 'TX', 'utah': 'UT', 'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA',
+        'west virginia': 'WV', 'wisconsin': 'WI', 'wyoming': 'WY', 'district of columbia': 'DC'
+    }
+    
+    # County-to-county/state lookup (same as _fetch_county_trend_fallback)
+    county_keywords = {
+        'san francisco': ('San Francisco', 'CA'), 'los angeles': ('Los Angeles', 'CA'),
+        'san diego': ('San Diego', 'CA'), 'boulder': ('Boulder', 'CO'),
+        'denver': ('Denver', 'CO'), 'montgomery county': ('Montgomery', 'MD'),
+        'montgomery': ('Montgomery', 'MD'), 'fairfax': ('Fairfax', 'VA'),
+        'arlington': ('Arlington', 'VA'), 'howard': ('Howard', 'MD'),
+        'miami': ('Miami-Dade', 'FL'), 'cook county': ('Cook', 'IL'),
+        'chicago': ('Cook', 'IL'), 'harris county': ('Harris', 'TX'),
+        'houston': ('Harris', 'TX'), 'king county': ('King', 'WA'),
+        'seattle': ('King', 'WA'), 'manhattan': ('New York', 'NY'),
+        'brooklyn': ('Kings', 'NY'), 'queens': ('Queens', 'NY'),
+        'bronx': ('Bronx', 'NY'), 'dallas': ('Dallas', 'TX'),
+        'austin': ('Travis', 'TX'), 'phoenix': ('Maricopa', 'AZ'),
+        'westchester': ('Westchester', 'NY'), 'nassau': ('Nassau', 'NY'),
+        'bergen': ('Bergen', 'NJ'), 'essex': ('Essex', 'NJ'),
+        'anne arundel': ('Anne Arundel', 'MD'), 'prince george': ("Prince George's", 'MD'),
+        'alameda': ('Alameda', 'CA'), 'baltimore county': ('Baltimore', 'MD'),
+        'baltimore': ('Baltimore', 'MD'), 'frederick': ('Frederick', 'MD'),
+    }
+    
+    q_lower = question.lower()
+    
+    # Step 1: Find county mentions
+    found_county = None
+    for keyword, (county, state) in sorted(county_keywords.items(), key=lambda x: -len(x[0])):
+        if keyword in q_lower:
+            found_county = (county, state)
+            break
+    
+    # Step 2: Find state mentions
+    found_state = None
+    for state_name, abbr in sorted(state_map.items(), key=lambda x: -len(x[0])):
+        if state_name in q_lower:
+            found_state = (state_name, abbr)
+            break
+    
+    # Must have BOTH a county and a state to do county vs state comparison
+    if not found_county or not found_state:
+        return []
+    
+    county_name, county_state_abbr = found_county
+    state_full_name, state_abbr = found_state
+    
+    # Avoid false positives: if the county IS the state (e.g., user said "New York" which matched both), skip
+    if county_name.lower() == state_full_name.lower():
+        return []
+    
+    driver = st.session_state.graph_rag.driver
+    results = []
+    
+    # Fetch county trend data
+    try:
+        with driver.session() as session:
+            records = [dict(r) for r in session.run("""
+                MATCH (z:ZipCode) WHERE z.county = $county AND z.state = $state AND z.eri_periods IS NOT NULL
+                RETURN z.county AS county, z.state AS state, z.eri_periods AS periods,
+                       z.eri_labor_history AS labor, z.eri_living_history AS living
+                LIMIT 1
+            """, county=county_name, state=county_state_abbr)]
+        if records and records[0].get("periods"):
+            r = records[0]
+            results.append({
+                "label": f"{r['county']}, {r['state']}",
+                "periods": r["periods"],
+                "labor": r["labor"],
+                "living": r["living"]
+            })
+    except:
+        pass
+    
+    # Fetch state average trend data — compute average across ALL ZIPs in that state per period
+    try:
+        with driver.session() as session:
+            records = [dict(r) for r in session.run("""
+                MATCH (z:ZipCode) WHERE z.state = $state AND z.eri_periods IS NOT NULL
+                WITH z.eri_periods AS periods, z.eri_labor_history AS labor, z.eri_living_history AS living
+                WITH head(collect(periods)) AS periods, collect(labor) AS all_labor, collect(living) AS all_living
+                WITH periods, 
+                     [i IN range(0, size(periods)-1) | 
+                        round(reduce(s=0.0, arr IN all_labor | s + arr[i]) / size(all_labor), 1)] AS avg_labor,
+                     [i IN range(0, size(periods)-1) | 
+                        round(reduce(s=0.0, arr IN all_living | s + arr[i]) / size(all_living), 1)] AS avg_living
+                RETURN periods, avg_labor, avg_living
+            """, state=state_abbr)]
+        if records and records[0].get("periods"):
+            r = records[0]
+            results.append({
+                "label": f"{state_full_name.title()} (State Avg)",
+                "periods": r["periods"],
+                "labor": r["avg_labor"],
+                "living": r["avg_living"]
+            })
+    except:
+        # Fallback: use representative county for state
+        try:
+            with driver.session() as session:
+                records = [dict(r) for r in session.run("""
+                    MATCH (z:ZipCode) WHERE z.state = $state AND z.eri_periods IS NOT NULL
+                    WITH z.county AS county, count(z) AS cnt
+                    ORDER BY cnt DESC LIMIT 1
+                    WITH county
+                    MATCH (z2:ZipCode) WHERE z2.county = county AND z2.state = $state AND z2.eri_periods IS NOT NULL
+                    RETURN z2.eri_periods AS periods, z2.eri_labor_history AS labor, z2.eri_living_history AS living
+                    LIMIT 1
+                """, state=state_abbr)]
+            if records and records[0].get("periods"):
+                r = records[0]
+                results.append({
+                    "label": f"{state_full_name.title()} (State Rep.)",
+                    "periods": r["periods"],
+                    "labor": r["labor"],
+                    "living": r["living"]
+                })
+        except:
+            pass
+    
+    # Must have both county and state data to be useful
+    if len(results) >= 2:
+        return results
+    return []
 
 
 def fetch_ranked_data(question: str) -> list:
@@ -1456,6 +1598,9 @@ def generate_response(question: str) -> dict:
             
             if chart_type == "LINE_TREND":
                 data = fetch_trend_data(resolved_question)
+                if not data:
+                    # Fallback 0: try county-vs-state comparison (e.g., "Montgomery County vs Maryland")
+                    data = _fetch_county_vs_state_trend(resolved_question)
                 if not data:
                     # Fallback 1: try county-level trend FIRST (handles "Montgomery County vs Westchester County")
                     data = _fetch_county_trend_fallback(resolved_question)
