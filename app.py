@@ -774,7 +774,7 @@ def _fetch_county_trend_fallback(question: str) -> list:
         'bergen': ('Bergen', 'NJ'),
         'essex': ('Essex', 'NJ'),
         'anne arundel': ('Anne Arundel', 'MD'),
-        'prince george': ("Prince George's", 'MD'),
+        'prince george': ('Prince Georges', 'MD'),
         'alameda': ('Alameda', 'CA'),
     }
     
@@ -838,8 +838,8 @@ def _fetch_county_trend_fallback(question: str) -> list:
 
 def _fetch_county_vs_state_trend(question: str) -> list:
     """Handle 'county vs state' trend comparisons.
-    Detects when the question asks to compare a specific county against its parent state.
-    Returns the county's actual trend data + the state's average trend data."""
+    Detects when the question asks to compare specific counties against their parent state.
+    Returns each county's actual trend data + the state's average trend data."""
     
     state_map = {
         'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
@@ -855,35 +855,48 @@ def _fetch_county_vs_state_trend(question: str) -> list:
         'west virginia': 'WV', 'wisconsin': 'WI', 'wyoming': 'WY', 'district of columbia': 'DC'
     }
     
-    # County-to-county/state lookup (same as _fetch_county_trend_fallback)
+    # County-to-Neo4j-name lookup — names must match EXACTLY what is in Neo4j
     county_keywords = {
         'san francisco': ('San Francisco', 'CA'), 'los angeles': ('Los Angeles', 'CA'),
         'san diego': ('San Diego', 'CA'), 'boulder': ('Boulder', 'CO'),
         'denver': ('Denver', 'CO'), 'montgomery county': ('Montgomery', 'MD'),
         'montgomery': ('Montgomery', 'MD'), 'fairfax': ('Fairfax', 'VA'),
-        'arlington': ('Arlington', 'VA'), 'howard': ('Howard', 'MD'),
-        'miami': ('Miami-Dade', 'FL'), 'cook county': ('Cook', 'IL'),
-        'chicago': ('Cook', 'IL'), 'harris county': ('Harris', 'TX'),
-        'houston': ('Harris', 'TX'), 'king county': ('King', 'WA'),
-        'seattle': ('King', 'WA'), 'manhattan': ('New York', 'NY'),
-        'brooklyn': ('Kings', 'NY'), 'queens': ('Queens', 'NY'),
-        'bronx': ('Bronx', 'NY'), 'dallas': ('Dallas', 'TX'),
-        'austin': ('Travis', 'TX'), 'phoenix': ('Maricopa', 'AZ'),
-        'westchester': ('Westchester', 'NY'), 'nassau': ('Nassau', 'NY'),
-        'bergen': ('Bergen', 'NJ'), 'essex': ('Essex', 'NJ'),
-        'anne arundel': ('Anne Arundel', 'MD'), 'prince george': ("Prince George's", 'MD'),
-        'alameda': ('Alameda', 'CA'), 'baltimore county': ('Baltimore', 'MD'),
+        'arlington': ('Arlington', 'VA'), 'howard county': ('Howard', 'MD'),
+        'howard': ('Howard', 'MD'), 'miami': ('Miami-Dade', 'FL'),
+        'cook county': ('Cook', 'IL'), 'chicago': ('Cook', 'IL'),
+        'harris county': ('Harris', 'TX'), 'houston': ('Harris', 'TX'),
+        'king county': ('King', 'WA'), 'seattle': ('King', 'WA'),
+        'manhattan': ('New York', 'NY'), 'brooklyn': ('Kings', 'NY'),
+        'queens': ('Queens', 'NY'), 'bronx': ('Bronx', 'NY'),
+        'dallas': ('Dallas', 'TX'), 'austin': ('Travis', 'TX'),
+        'phoenix': ('Maricopa', 'AZ'), 'westchester': ('Westchester', 'NY'),
+        'nassau': ('Nassau', 'NY'), 'bergen': ('Bergen', 'NJ'),
+        'essex': ('Essex', 'NJ'), 'anne arundel': ('Anne Arundel', 'MD'),
+        'prince george': ('Prince Georges', 'MD'),
+        "prince george's": ('Prince Georges', 'MD'),
+        'prince georges': ('Prince Georges', 'MD'),
+        'alameda': ('Alameda', 'CA'),
+        'baltimore county': ('Baltimore', 'MD'), 'baltimore city': ('Baltimore City', 'MD'),
         'baltimore': ('Baltimore', 'MD'), 'frederick': ('Frederick', 'MD'),
+        'charles': ('Charles', 'MD'), 'harford': ('Harford', 'MD'),
+        'saint marys': ('Saint Marys', 'MD'), "st. mary's": ('Saint Marys', 'MD'),
+        'calvert': ('Calvert', 'MD'), 'cecil': ('Cecil', 'MD'),
     }
     
     q_lower = question.lower()
     
-    # Step 1: Find county mentions
-    found_county = None
+    # Step 1: Find ALL county mentions (support multiple)
+    found_counties = []
+    used_keywords = set()
     for keyword, (county, state) in sorted(county_keywords.items(), key=lambda x: -len(x[0])):
-        if keyword in q_lower:
-            found_county = (county, state)
-            break
+        if keyword in q_lower and keyword not in used_keywords:
+            county_key = f"{county}|{state}"
+            if county_key not in [f"{c}|{s}" for c, s in found_counties]:
+                found_counties.append((county, state))
+                used_keywords.add(keyword)
+                for other_kw, (other_c, other_s) in county_keywords.items():
+                    if other_c == county and other_s == state:
+                        used_keywords.add(other_kw)
     
     # Step 2: Find state mentions
     found_state = None
@@ -892,41 +905,38 @@ def _fetch_county_vs_state_trend(question: str) -> list:
             found_state = (state_name, abbr)
             break
     
-    # Must have BOTH a county and a state to do county vs state comparison
-    if not found_county or not found_state:
+    if not found_counties or not found_state:
         return []
     
-    county_name, county_state_abbr = found_county
     state_full_name, state_abbr = found_state
     
-    # Avoid false positives: if the county IS the state (e.g., user said "New York" which matched both), skip
-    if county_name.lower() == state_full_name.lower():
+    found_counties = [(c, s) for c, s in found_counties if c.lower() != state_full_name.lower()]
+    if not found_counties:
         return []
     
     driver = st.session_state.graph_rag.driver
     results = []
     
-    # Fetch county trend data
-    try:
-        with driver.session() as session:
-            records = [dict(r) for r in session.run("""
-                MATCH (z:ZipCode) WHERE z.county = $county AND z.state = $state AND z.eri_periods IS NOT NULL
-                RETURN z.county AS county, z.state AS state, z.eri_periods AS periods,
-                       z.eri_labor_history AS labor, z.eri_living_history AS living
-                LIMIT 1
-            """, county=county_name, state=county_state_abbr)]
-        if records and records[0].get("periods"):
-            r = records[0]
-            results.append({
-                "label": f"{r['county']}, {r['state']}",
-                "periods": r["periods"],
-                "labor": r["labor"],
-                "living": r["living"]
-            })
-    except:
-        pass
+    for county_name, county_state_abbr in found_counties[:4]:
+        try:
+            with driver.session() as session:
+                records = [dict(r) for r in session.run("""
+                    MATCH (z:ZipCode) WHERE z.county = $county AND z.state = $state AND z.eri_periods IS NOT NULL
+                    RETURN z.county AS county, z.state AS state, z.eri_periods AS periods,
+                           z.eri_labor_history AS labor, z.eri_living_history AS living
+                    LIMIT 1
+                """, county=county_name, state=county_state_abbr)]
+            if records and records[0].get("periods"):
+                r = records[0]
+                results.append({
+                    "label": f"{r['county']}, {r['state']}",
+                    "periods": r["periods"],
+                    "labor": r["labor"],
+                    "living": r["living"]
+                })
+        except:
+            continue
     
-    # Fetch state average trend data — compute average across ALL ZIPs in that state per period
     try:
         with driver.session() as session:
             records = [dict(r) for r in session.run("""
@@ -949,7 +959,6 @@ def _fetch_county_vs_state_trend(question: str) -> list:
                 "living": r["avg_living"]
             })
     except:
-        # Fallback: use representative county for state
         try:
             with driver.session() as session:
                 records = [dict(r) for r in session.run("""
@@ -972,7 +981,6 @@ def _fetch_county_vs_state_trend(question: str) -> list:
         except:
             pass
     
-    # Must have both county and state data to be useful
     if len(results) >= 2:
         return results
     return []
