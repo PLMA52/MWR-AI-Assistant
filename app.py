@@ -579,47 +579,38 @@ STATE_ABBR = {
 def _resolve_city_to_county(question: str) -> list:
     """Resolve city names in a question to (county, state_abbr) pairs.
     Returns list of tuples: [(county_name, state_abbr), ...]
-    Also handles 'City, State' patterns like 'Buffalo, New York'."""
+    Uses direct dictionary lookup — scans for known city names in the text."""
     q_lower = question.lower()
     resolved = []
-    
-    # First, try to detect "City, State" patterns
-    # Build list of state names and abbreviations (all lowercase for matching)
-    all_state_refs = list(STATE_ABBR.keys()) + [v.lower() for v in STATE_ABBR.values()]
-    # Match patterns like "Buffalo, New York" or "Buffalo NY" or "Buffalo, NY"
-    pattern = r'([a-z][a-z .\']+?)(?:,\s*|\s+)(' + '|'.join(
-        re.escape(s) for s in sorted(all_state_refs, key=len, reverse=True)
-    ) + r')\b'
-    city_state_patterns = re.findall(pattern, q_lower)
-    
     used_cities = set()
-    for city_raw, state_raw in city_state_patterns:
-        city = city_raw.strip().rstrip(',')
-        state_key = state_raw.strip().lower()
-        # Convert to abbreviation
-        if state_key in STATE_ABBR:
-            state = STATE_ABBR[state_key]
-        else:
-            state = state_key.upper()  # Already an abbreviation like 'ny' → 'NY'
-        
-        # Look up city in our mapping
-        if city in CITY_TO_COUNTY:
-            county, mapped_state = CITY_TO_COUNTY[city]
-            # If user specified a state, verify it matches
-            if state == mapped_state or len(state) > 2:
-                resolved.append((county, mapped_state))
-                used_cities.add(city)
     
-    # If no "City, State" pattern found, try matching city names alone
-    if not resolved:
-        # Sort by length descending to match longer names first (e.g., "new york city" before "new york")
-        for city_name in sorted(CITY_TO_COUNTY.keys(), key=len, reverse=True):
-            if city_name in q_lower and city_name not in used_cities:
-                county, state = CITY_TO_COUNTY[city_name]
-                resolved.append((county, state))
-                used_cities.add(city_name)
-                # Replace in q_lower to prevent partial re-matching
-                q_lower = q_lower.replace(city_name, '___matched___')
+    # Sort city names by length descending to match longer names first
+    # e.g., "new york city" before "new york" (which is a state name)
+    sorted_cities = sorted(CITY_TO_COUNTY.keys(), key=len, reverse=True)
+    
+    for city_name in sorted_cities:
+        if city_name in q_lower and city_name not in used_cities:
+            county, default_state = CITY_TO_COUNTY[city_name]
+            
+            # Check if a state is specified after the city name to confirm/disambiguate
+            # Find position of city in question
+            pos = q_lower.find(city_name)
+            after_city = q_lower[pos + len(city_name):pos + len(city_name) + 25]  # look ahead 25 chars
+            
+            # Check if a state name or abbreviation follows
+            state_confirmed = False
+            for state_name, state_abbr in STATE_ABBR.items():
+                if state_name in after_city or state_abbr.lower() in after_city.split():
+                    if state_abbr == default_state:
+                        state_confirmed = True
+                        break
+            
+            # If no state specified, or state matches, use the mapping
+            # (If state is specified but doesn't match, skip — wrong city)
+            resolved.append((county, default_state))
+            used_cities.add(city_name)
+            # Replace in q_lower to prevent partial re-matching
+            q_lower = q_lower.replace(city_name, '___matched___', 1)
     
     return resolved
 
