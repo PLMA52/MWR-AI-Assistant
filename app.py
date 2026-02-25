@@ -1049,7 +1049,9 @@ DATABASE STRUCTURE:
 - ZipCode nodes have: newRiskScorePct (0-100 risk score), county, state (abbreviation), 
   cost_of_labor (ERI index, 100=national avg), cost_of_living (ERI index), 
   unemployment_rate, median_household_income, workforce_population,
-  pct_bachelors, pct_graduate, pct_no_diploma, total_population
+  pct_bachelors, pct_graduate, pct_no_diploma, total_population,
+  cbsa_code (CBSA/Division number or ZIP if rural), cbsa_classification ('Division'=major market, 'CBSA'=mid-size, 'Non CBSA'=rural),
+  population_density_sq_mi (people per square mile), preferred_city, fips
 - State nodes have: name (full name), abbr (2-letter abbreviation)
 - Relationships: (ZipCode)-[:IN_STATE]->(State)
 
@@ -1772,6 +1774,9 @@ DATA AVAILABLE IN THE DATABASE:
 - Unemployment Rate: County-level BLS unemployment data
 - Demographics: Total population, median income, median age, median home value
 - Geography: 40,000+ ZIP codes linked to counties, states, and CBSAs
+- CBSA Classification: Each ZIP is classified as Division (major market, 1M+ population), CBSA (mid-size market), or Non CBSA (rural area)
+- Population Density: People per square mile at the ZIP code level — helps assess urban vs rural labor supply dynamics
+- Preferred City: The major city associated with each ZIP code area
 
 When answering, provide clear business insights. Use specific numbers from the data.
 Explain what the numbers mean for Sodexo's business — contract pricing, talent competition, wage pressures.
@@ -2009,6 +2014,8 @@ with st.sidebar:
     - Cost of labor & cost of living
     - **ERI cost trends with charts! 📈**
     - Unemployment rates
+    - CBSA market classification 🏙️
+    - Population density
     - Market profiles for bidding
     - Latest MW news
     - **Follow-up questions!** 🧠
