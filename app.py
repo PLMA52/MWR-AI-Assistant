@@ -584,20 +584,23 @@ def _resolve_city_to_county(question: str) -> list:
     resolved = []
     
     # First, try to detect "City, State" patterns
-    import re
+    # Build list of state names and abbreviations (all lowercase for matching)
+    all_state_refs = list(STATE_ABBR.keys()) + [v.lower() for v in STATE_ABBR.values()]
     # Match patterns like "Buffalo, New York" or "Buffalo NY" or "Buffalo, NY"
-    city_state_patterns = re.findall(
-        r'([a-z][a-z .\']+?)(?:,\s*|\s+)(' + '|'.join(
-            list(STATE_ABBR.keys()) + list(STATE_ABBR.values())
-        ).replace('.', r'\.') + r')\b', q_lower
-    )
+    pattern = r'([a-z][a-z .\']+?)(?:,\s*|\s+)(' + '|'.join(
+        re.escape(s) for s in sorted(all_state_refs, key=len, reverse=True)
+    ) + r')\b'
+    city_state_patterns = re.findall(pattern, q_lower)
     
     used_cities = set()
     for city_raw, state_raw in city_state_patterns:
         city = city_raw.strip().rstrip(',')
-        state = state_raw.strip().upper()
-        if len(state) > 2:
-            state = STATE_ABBR.get(state_raw.strip().lower(), state)
+        state_key = state_raw.strip().lower()
+        # Convert to abbreviation
+        if state_key in STATE_ABBR:
+            state = STATE_ABBR[state_key]
+        else:
+            state = state_key.upper()  # Already an abbreviation like 'ny' → 'NY'
         
         # Look up city in our mapping
         if city in CITY_TO_COUNTY:
@@ -645,8 +648,14 @@ def _fetch_city_trend_comparison(question: str) -> list:
                 
                 if records:
                     r = dict(records[0])
-                    r['county'] = _county_label(r['county'], r['state'])
-                    results.append(r)
+                    results.append({
+                        "label": _county_label(r['county'], r['state']),
+                        "county": r['county'],
+                        "state": r['state'],
+                        "periods": r['periods'],
+                        "labor": r['labor'],
+                        "living": r['living']
+                    })
         except Exception:
             continue
     
