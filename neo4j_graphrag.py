@@ -163,6 +163,8 @@ CBSA MARKET CLASSIFICATION DATA:
 - To count ZIPs by classification in a state: MATCH (z:ZipCode) WHERE z.state = "CA" AND z.cbsa_classification IS NOT NULL RETURN z.cbsa_classification AS classification, count(DISTINCT z.zip) AS zip_count ORDER BY zip_count DESC
 - To find high-density areas: MATCH (z:ZipCode) WHERE z.population_density_sq_mi > 10000 RETURN DISTINCT z.county, z.state, z.population_density_sq_mi, z.cbsa_classification ORDER BY z.population_density_sq_mi DESC LIMIT 10
 - IMPORTANT: cbsa_classification, cbsa_code, and population_density_sq_mi are properties directly on ZipCode nodes, NOT on separate CBSA nodes
+- IMPORTANT: ZIP codes are stored as STRINGS with leading zeros (e.g., "07001", "20878"). Always use string format in queries: {zip: "20878"} not {zip: 20878}
+- When a user asks "What is the CBSA classification for ZIP XXXXX?" always use: MATCH (z:ZipCode {zip: "XXXXX"}) RETURN z.zip, z.cbsa_classification, z.cbsa_code, z.population_density_sq_mi, z.preferred_city, z.county, z.state
 
 ERI HISTORICAL TREND DATA (Time-Series, 13 periods: May 2024 → January 2026):
 - eri_periods: List of 13 period labels ['2024-05', '2024-07', '2024-10', '2024-11', '2025-01', '2025-02', '2025-04', '2025-05', '2025-07', '2025-08', '2025-10', '2025-11', '2026-01']
