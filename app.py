@@ -441,6 +441,217 @@ def _county_label(county_name: str, state_abbr: str) -> str:
         return f"{name}, {state_abbr}"
     return f"{name} County, {state_abbr}"
 
+# ── City-to-County Resolution ────────────────────────────────────
+# Maps common US city names to their actual county + state for accurate queries.
+# This prevents "Buffalo, New York" from matching "Buffalo County, WI" instead of Erie County, NY.
+
+CITY_TO_COUNTY = {
+    # New York State
+    'buffalo': ('Erie', 'NY'),
+    'new york city': ('New York', 'NY'),  # Manhattan; also Kings, Queens, Bronx, Richmond
+    'nyc': ('New York', 'NY'),
+    'manhattan': ('New York', 'NY'),
+    'brooklyn': ('Kings', 'NY'),
+    'queens': ('Queens', 'NY'),
+    'bronx': ('Bronx', 'NY'),
+    'staten island': ('Richmond', 'NY'),
+    'rochester': ('Monroe', 'NY'),
+    'syracuse': ('Onondaga', 'NY'),
+    'albany': ('Albany', 'NY'),
+    'yonkers': ('Westchester', 'NY'),
+    'white plains': ('Westchester', 'NY'),
+    # California
+    'los angeles': ('Los Angeles', 'CA'),
+    'san francisco': ('San Francisco', 'CA'),
+    'san diego': ('San Diego', 'CA'),
+    'san jose': ('Santa Clara', 'CA'),
+    'sacramento': ('Sacramento', 'CA'),
+    'oakland': ('Alameda', 'CA'),
+    'fresno': ('Fresno', 'CA'),
+    'long beach': ('Los Angeles', 'CA'),
+    'anaheim': ('Orange', 'CA'),
+    'irvine': ('Orange', 'CA'),
+    'riverside': ('Riverside', 'CA'),
+    'bakersfield': ('Kern', 'CA'),
+    # Texas
+    'houston': ('Harris', 'TX'),
+    'dallas': ('Dallas', 'TX'),
+    'san antonio': ('Bexar', 'TX'),
+    'austin': ('Travis', 'TX'),
+    'fort worth': ('Tarrant', 'TX'),
+    'el paso': ('El Paso', 'TX'),
+    'plano': ('Collin', 'TX'),
+    'arlington': ('Tarrant', 'TX'),
+    # Florida
+    'miami': ('Miami-Dade', 'FL'),
+    'orlando': ('Orange', 'FL'),
+    'tampa': ('Hillsborough', 'FL'),
+    'jacksonville': ('Duval', 'FL'),
+    'st. petersburg': ('Pinellas', 'FL'),
+    'fort lauderdale': ('Broward', 'FL'),
+    # Illinois
+    'chicago': ('Cook', 'IL'),
+    'naperville': ('DuPage', 'IL'),
+    'aurora': ('Kane', 'IL'),
+    # Pennsylvania
+    'philadelphia': ('Philadelphia', 'PA'),
+    'pittsburgh': ('Allegheny', 'PA'),
+    # Arizona
+    'phoenix': ('Maricopa', 'AZ'),
+    'tucson': ('Pima', 'AZ'),
+    'scottsdale': ('Maricopa', 'AZ'),
+    'mesa': ('Maricopa', 'AZ'),
+    # Other major cities
+    'seattle': ('King', 'WA'),
+    'portland': ('Multnomah', 'OR'),
+    'denver': ('Denver', 'CO'),
+    'boulder': ('Boulder', 'CO'),
+    'atlanta': ('Fulton', 'GA'),
+    'boston': ('Suffolk', 'MA'),
+    'detroit': ('Wayne', 'MI'),
+    'minneapolis': ('Hennepin', 'MN'),
+    'st. louis': ('St. Louis City', 'MO'),
+    'kansas city': ('Jackson', 'MO'),
+    'nashville': ('Davidson', 'TN'),
+    'memphis': ('Shelby', 'TN'),
+    'new orleans': ('Orleans', 'LA'),
+    'las vegas': ('Clark', 'NV'),
+    'reno': ('Washoe', 'NV'),
+    'charlotte': ('Mecklenburg', 'NC'),
+    'raleigh': ('Wake', 'NC'),
+    'columbus': ('Franklin', 'OH'),
+    'cleveland': ('Cuyahoga', 'OH'),
+    'cincinnati': ('Hamilton', 'OH'),
+    'indianapolis': ('Marion', 'IN'),
+    'milwaukee': ('Milwaukee', 'WI'),
+    'madison': ('Dane', 'WI'),
+    'salt lake city': ('Salt Lake', 'UT'),
+    'baltimore': ('Baltimore', 'MD'),  # Baltimore City vs Baltimore County — city maps to city
+    'washington': ('District of Columbia', 'DC'),
+    'washington dc': ('District of Columbia', 'DC'),
+    'dc': ('District of Columbia', 'DC'),
+    'richmond': ('Richmond City', 'VA'),
+    'virginia beach': ('Virginia Beach City', 'VA'),
+    'norfolk': ('Norfolk City', 'VA'),
+    'honolulu': ('Honolulu', 'HI'),
+    'anchorage': ('Anchorage', 'AK'),
+    'omaha': ('Douglas', 'NE'),
+    'des moines': ('Polk', 'IA'),
+    'louisville': ('Jefferson', 'KY'),
+    'oklahoma city': ('Oklahoma', 'OK'),
+    'tulsa': ('Tulsa', 'OK'),
+    'albuquerque': ('Bernalillo', 'NM'),
+    'boise': ('Ada', 'ID'),
+    'charleston': ('Charleston', 'SC'),
+    'birmingham': ('Jefferson', 'AL'),
+    'little rock': ('Pulaski', 'AR'),
+    'hartford': ('Hartford', 'CT'),
+    'providence': ('Providence', 'RI'),
+    'newark': ('Essex', 'NJ'),
+    'jersey city': ('Hudson', 'NJ'),
+    'wilmington': ('New Castle', 'DE'),
+    # Maryland specific (Dan's common queries)
+    'gaithersburg': ('Montgomery', 'MD'),
+    'bethesda': ('Montgomery', 'MD'),
+    'silver spring': ('Montgomery', 'MD'),
+    'columbia': ('Howard', 'MD'),
+    'annapolis': ('Anne Arundel', 'MD'),
+    'frederick': ('Frederick', 'MD'),
+    'towson': ('Baltimore', 'MD'),
+    'hagerstown': ('Washington', 'MD'),
+}
+
+# State name to abbreviation mapping
+STATE_ABBR = {
+    'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
+    'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE', 'florida': 'FL', 'georgia': 'GA',
+    'hawaii': 'HI', 'idaho': 'ID', 'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA',
+    'kansas': 'KS', 'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+    'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
+    'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
+    'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
+    'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
+    'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+    'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT', 'vermont': 'VT',
+    'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV', 'wisconsin': 'WI', 'wyoming': 'WY'
+}
+
+def _resolve_city_to_county(question: str) -> list:
+    """Resolve city names in a question to (county, state_abbr) pairs.
+    Returns list of tuples: [(county_name, state_abbr), ...]
+    Also handles 'City, State' patterns like 'Buffalo, New York'."""
+    q_lower = question.lower()
+    resolved = []
+    
+    # First, try to detect "City, State" patterns
+    import re
+    # Match patterns like "Buffalo, New York" or "Buffalo NY" or "Buffalo, NY"
+    city_state_patterns = re.findall(
+        r'([a-z][a-z .\']+?)(?:,\s*|\s+)(' + '|'.join(
+            list(STATE_ABBR.keys()) + list(STATE_ABBR.values())
+        ).replace('.', r'\.') + r')\b', q_lower
+    )
+    
+    used_cities = set()
+    for city_raw, state_raw in city_state_patterns:
+        city = city_raw.strip().rstrip(',')
+        state = state_raw.strip().upper()
+        if len(state) > 2:
+            state = STATE_ABBR.get(state_raw.strip().lower(), state)
+        
+        # Look up city in our mapping
+        if city in CITY_TO_COUNTY:
+            county, mapped_state = CITY_TO_COUNTY[city]
+            # If user specified a state, verify it matches
+            if state == mapped_state or len(state) > 2:
+                resolved.append((county, mapped_state))
+                used_cities.add(city)
+    
+    # If no "City, State" pattern found, try matching city names alone
+    if not resolved:
+        # Sort by length descending to match longer names first (e.g., "new york city" before "new york")
+        for city_name in sorted(CITY_TO_COUNTY.keys(), key=len, reverse=True):
+            if city_name in q_lower and city_name not in used_cities:
+                county, state = CITY_TO_COUNTY[city_name]
+                resolved.append((county, state))
+                used_cities.add(city_name)
+                # Replace in q_lower to prevent partial re-matching
+                q_lower = q_lower.replace(city_name, '___matched___')
+    
+    return resolved
+
+
+def _fetch_city_trend_comparison(question: str) -> list:
+    """Fetch trend data for city-based queries by resolving cities to counties first.
+    Handles queries like 'Compare Buffalo NY to New York City NY'."""
+    cities = _resolve_city_to_county(question)
+    if not cities:
+        return []
+    
+    results = []
+    driver = st.session_state.graph_rag.driver
+    
+    for county, state in cities:
+        try:
+            with driver.session() as session:
+                records = list(session.run("""
+                    MATCH (z:ZipCode)
+                    WHERE z.county = $county AND z.state = $state AND z.eri_periods IS NOT NULL
+                    RETURN DISTINCT z.county AS county, z.state AS state,
+                           z.eri_periods AS periods, z.eri_labor_history AS labor,
+                           z.eri_living_history AS living
+                    LIMIT 1
+                """, county=county, state=state))
+                
+                if records:
+                    r = dict(records[0])
+                    r['county'] = _county_label(r['county'], r['state'])
+                    results.append(r)
+        except Exception:
+            continue
+    
+    return results if len(results) >= 1 else []
+
 def should_generate_chart(question: str) -> bool:
     """Detect if a question would benefit from any type of chart"""
     chart_keywords = [
@@ -1659,7 +1870,17 @@ def generate_response(question: str) -> dict:
                 is_pure_state_compare = len(matched_states) >= 2 and not has_county_word
                 
                 data = None
-                if is_pure_state_compare:
+                
+                # Priority 0: Try city-to-county resolution FIRST
+                # This handles "Buffalo, New York" → Erie County, NY correctly
+                # and prevents wrong matches like Buffalo County, WI
+                city_resolved = _resolve_city_to_county(resolved_question)
+                if city_resolved and not has_county_word:
+                    data = _fetch_city_trend_comparison(resolved_question)
+                    if data:
+                        chart_error += " (city→county resolved)"
+                
+                if not data and is_pure_state_compare:
                     # Skip LLM Cypher entirely — go straight to state average computation
                     data = _fetch_state_trend_compare(resolved_question)
                 
@@ -1686,7 +1907,13 @@ def generate_response(question: str) -> dict:
                     chart_failed_reason = chart_failed_reason or "no_data"
             
             elif chart_type == "BAR_COMPARE":
-                data = fetch_trend_data(resolved_question)
+                # Try city-to-county resolution first for bar comparisons too
+                city_resolved = _resolve_city_to_county(resolved_question)
+                data = None
+                if city_resolved:
+                    data = _fetch_city_trend_comparison(resolved_question)
+                if not data:
+                    data = fetch_trend_data(resolved_question)
                 if not data:
                     # Fallback: try state-level comparison using current values instead of time-series
                     data = _fetch_state_bar_compare(resolved_question)
