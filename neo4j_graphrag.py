@@ -74,7 +74,7 @@ DATABASE SCHEMA:
 {schema}
 
 KEY NODE TYPES:
-- ZipCode: Contains zip, county, state, fips, New_Risk_Score_Pct (0-100 risk score), New_Risk_Tier (Critical/High/Elevated/Moderate/Low), New_Combined_Risk_Score (0-500 scale), County_Risk_Score_Pct, HCF, MHJ, Current_Min_Wage, City_Jurisdictions, Industry_Carveouts, unemployment_rate (county unemployment % from BLS), unemployment_updated (date of last update), total_population (county population), median_household_income (median income in $), median_age (median age in years), median_home_value (median home value in $), college_educated_count (people with bachelor's or higher), census_updated (date of census data update), pct_no_diploma (% of 25+ population with no high school diploma), pct_hs_diploma (% with high school diploma or GED), pct_some_college (% with some college or associate's degree), pct_bachelors (% with bachelor's degree), pct_graduate (% with graduate/professional degree), workforce_population (estimated population ages 18-64), cost_of_labor (ERI Cost of Labor index, 100 = national average), cost_of_living (ERI Cost of Living index, 100 = national average), pct_age_0_to_9 (% of population aged 0-9), pct_age_10_to_19 (% aged 10-19), pct_age_20_to_29 (% aged 20-29), pct_age_30_to_39 (% aged 30-39), pct_age_40_to_49 (% aged 40-49), pct_age_50_to_59 (% aged 50-59), pct_age_60_to_69 (% aged 60-69), pct_age_70_plus (% aged 70+)
+- ZipCode: Contains zip, county, state, fips, New_Risk_Score_Pct (0-100 risk score), New_Risk_Tier (Critical/High/Elevated/Moderate/Low), New_Combined_Risk_Score (0-500 scale), County_Risk_Score_Pct, HCF, MHJ, Current_Min_Wage, City_Jurisdictions, Industry_Carveouts, unemployment_rate (county unemployment % from BLS), unemployment_updated (date of last update), total_population (county population), median_household_income (median income in $), median_age (median age in years), median_home_value (median home value in $), college_educated_count (people with bachelor's or higher), census_updated (date of census data update), pct_no_diploma (% of 25+ population with no high school diploma), pct_hs_diploma (% with high school diploma or GED), pct_some_college (% with some college or associate's degree), pct_bachelors (% with bachelor's degree), pct_graduate (% with graduate/professional degree), workforce_population (estimated population ages 18-64), cost_of_labor (ERI Cost of Labor index, 100 = national average), cost_of_living (ERI Cost of Living index, 100 = national average), pct_age_0_to_9 (% of population aged 0-9), pct_age_10_to_19 (% aged 10-19), pct_age_20_to_29 (% aged 20-29), pct_age_30_to_39 (% aged 30-39), pct_age_40_to_49 (% aged 40-49), pct_age_50_to_59 (% aged 50-59), pct_age_60_to_69 (% aged 60-69), pct_age_70_plus (% aged 70+), cbsa_code (CBSA/Division number or ZIP code if rural), cbsa_classification ('Division' = major metro market with 1M+ population, 'CBSA' = mid-size market, 'Non CBSA' = rural area), population_density_sq_mi (people per square mile), preferred_city (preferred city name for the ZIP)
 - State: Contains name, abbr (state abbreviation like 'CA', 'NY')
 - County: Contains name, fips
 - CBSA: Contains name, cbsa_code
@@ -148,6 +148,22 @@ AGE BREAKOUT DATA (8 decade groups, from demographic data):
 - To find young workforce counties: MATCH (z:ZipCode) WHERE z.pct_age_20_to_29 > 18 RETURN DISTINCT z.county, z.state, z.pct_age_20_to_29 ORDER BY z.pct_age_20_to_29 DESC LIMIT 10
 - To find aging population counties: MATCH (z:ZipCode) WHERE z.pct_age_70_plus > 15 RETURN DISTINCT z.county, z.state, z.pct_age_70_plus ORDER BY z.pct_age_70_plus DESC LIMIT 10
 
+CBSA MARKET CLASSIFICATION DATA:
+- cbsa_classification: Market size classification stored directly on ZipCode nodes
+  - 'Division' = major metropolitan market (1M+ population, e.g., New York, Los Angeles, Chicago)
+  - 'CBSA' = mid-size metropolitan or micropolitan market
+  - 'Non CBSA' = rural area, not part of any metro/micro area
+- cbsa_code: The CBSA or Division number (or ZIP code itself if rural/Non CBSA)
+- population_density_sq_mi: People per square mile for the ZIP code area
+- preferred_city: The preferred/primary city name associated with the ZIP
+- To get CBSA classification for a ZIP: MATCH (z:ZipCode {zip: "20878"}) RETURN z.zip, z.county, z.state, z.cbsa_classification, z.cbsa_code, z.population_density_sq_mi, z.preferred_city
+- To get CBSA classification for a county: MATCH (z:ZipCode) WHERE z.county = "Montgomery" AND z.state = "MD" RETURN DISTINCT z.county, z.state, z.cbsa_classification, z.cbsa_code, z.population_density_sq_mi LIMIT 1
+- To find all Division (major market) ZIPs in a state: MATCH (z:ZipCode) WHERE z.state = "MD" AND z.cbsa_classification = "Division" RETURN DISTINCT z.county, z.cbsa_classification, z.cbsa_code, count(z) AS zip_count ORDER BY zip_count DESC
+- To find rural areas: MATCH (z:ZipCode) WHERE z.state = "WY" AND z.cbsa_classification = "Non CBSA" RETURN DISTINCT z.county, z.state, z.cbsa_classification, z.population_density_sq_mi ORDER BY z.population_density_sq_mi ASC LIMIT 10
+- To count ZIPs by classification in a state: MATCH (z:ZipCode) WHERE z.state = "CA" AND z.cbsa_classification IS NOT NULL RETURN z.cbsa_classification AS classification, count(DISTINCT z.zip) AS zip_count ORDER BY zip_count DESC
+- To find high-density areas: MATCH (z:ZipCode) WHERE z.population_density_sq_mi > 10000 RETURN DISTINCT z.county, z.state, z.population_density_sq_mi, z.cbsa_classification ORDER BY z.population_density_sq_mi DESC LIMIT 10
+- IMPORTANT: cbsa_classification, cbsa_code, and population_density_sq_mi are properties directly on ZipCode nodes, NOT on separate CBSA nodes
+
 ERI HISTORICAL TREND DATA (Time-Series, 13 periods: May 2024 → January 2026):
 - eri_periods: List of 13 period labels ['2024-05', '2024-07', '2024-10', '2024-11', '2025-01', '2025-02', '2025-04', '2025-05', '2025-07', '2025-08', '2025-10', '2025-11', '2026-01']
 - eri_labor_history: List of 13 Cost of Labor index values corresponding to each period (0.0 means no data for that period)
@@ -162,8 +178,8 @@ ERI HISTORICAL TREND DATA (Time-Series, 13 periods: May 2024 → January 2026):
 - IMPORTANT: Values of 0.0 in the arrays mean data was not available for that period — exclude them from trend analysis
 
 COMPREHENSIVE MARKET PROFILE:
-- When asked for a full market profile or "tell me everything about" a county, include: risk score, population, workforce, age breakout, education, unemployment, income, cost of labor, cost of living
-- Example: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.New_Risk_Score_Pct, z.New_Risk_Tier, z.total_population, z.workforce_population, z.median_age, z.pct_age_0_to_9, z.pct_age_10_to_19, z.pct_age_20_to_29, z.pct_age_30_to_39, z.pct_age_40_to_49, z.pct_age_50_to_59, z.pct_age_60_to_69, z.pct_age_70_plus, z.pct_no_diploma, z.pct_hs_diploma, z.pct_some_college, z.pct_bachelors, z.pct_graduate, z.unemployment_rate, z.median_household_income, z.cost_of_labor, z.cost_of_living LIMIT 1
+- When asked for a full market profile or "tell me everything about" a county, include: risk score, population, workforce, age breakout, education, unemployment, income, cost of labor, cost of living, CBSA classification, population density
+- Example: MATCH (z:ZipCode) WHERE z.county = "San Francisco" AND z.state = "CA" RETURN DISTINCT z.county, z.state, z.New_Risk_Score_Pct, z.New_Risk_Tier, z.total_population, z.workforce_population, z.median_age, z.pct_age_0_to_9, z.pct_age_10_to_19, z.pct_age_20_to_29, z.pct_age_30_to_39, z.pct_age_40_to_49, z.pct_age_50_to_59, z.pct_age_60_to_69, z.pct_age_70_plus, z.pct_no_diploma, z.pct_hs_diploma, z.pct_some_college, z.pct_bachelors, z.pct_graduate, z.unemployment_rate, z.median_household_income, z.cost_of_labor, z.cost_of_living, z.cbsa_classification, z.cbsa_code, z.population_density_sq_mi LIMIT 1
 
 IMPORTANT:
 - State abbreviations are stored in State.abbr (e.g., 'CA', 'NY', 'TX')
