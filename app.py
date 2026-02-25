@@ -261,6 +261,11 @@ if "graph_rag" not in st.session_state:
                 api_key=os.getenv("ANTHROPIC_API_KEY"),
                 max_tokens=4096
             )
+            st.session_state.llm_fast = ChatAnthropic(
+                model="claude-haiku-4-5-20251001",
+                api_key=os.getenv("ANTHROPIC_API_KEY"),
+                max_tokens=4096
+            )
             st.session_state.connected = True
             
             # Load cross-session memory for the authenticated user
@@ -347,8 +352,7 @@ Follow-up Question: {question}
 Rewritten standalone question:""")
     ])
     
-    chain = resolve_prompt | st.session_state.llm | StrOutputParser()
-    
+    chain = resolve_prompt | st.session_state.llm_fast | StrOutputParser()    
     try:
         resolved = chain.invoke({
             "history": conversation_context,
@@ -374,7 +378,7 @@ Respond with ONLY one word: DATABASE, WEB_SEARCH, BOTH, or GENERAL"""),
         ("human", "{question}")
     ])
     
-    chain = prompt | st.session_state.llm | StrOutputParser()
+    chain = prompt | st.session_state.llm_fast | StrOutputParser()
     try:
         result = chain.invoke({"question": question}).strip().upper()
     except Exception:
@@ -502,7 +506,7 @@ Return ONLY one word: LINE_TREND, BAR_COMPARE, HBAR_RANK, or NONE"""),
         ("human", "{question}")
     ])
     
-    chain = chart_prompt | st.session_state.llm | StrOutputParser()
+    chain = chart_prompt | st.session_state.llm_fast | StrOutputParser()
     try:
         result = chain.invoke({"question": question}).strip().upper()
         if result not in ["LINE_TREND", "BAR_COMPARE", "HBAR_RANK", "NONE"]:
@@ -591,7 +595,7 @@ Return ONLY the Cypher query, nothing else."""),
         ("human", "{question}")
     ])
     
-    chain = cypher_prompt | st.session_state.llm | StrOutputParser()
+    chain = cypher_prompt | st.session_state.llm_fast | StrOutputParser()
     try:
         cypher = chain.invoke({"question": question}).strip().replace("```cypher", "").replace("```", "").strip()
     except:
@@ -1106,7 +1110,7 @@ Return ONLY the Cypher query. No explanations, no markdown."""),
         ("human", "Question: {question}\nLimit: {limit}")
     ])
     
-    chain = rank_cypher_prompt | st.session_state.llm | StrOutputParser()
+    chain = rank_cypher_prompt | st.session_state.llm_fast | StrOutputParser()
     
     try:
         cypher = chain.invoke({"question": question, "limit": str(limit)}).strip()
