@@ -375,7 +375,10 @@ Respond with ONLY one word: DATABASE, WEB_SEARCH, BOTH, or GENERAL"""),
     ])
     
     chain = prompt | st.session_state.llm | StrOutputParser()
-    result = chain.invoke({"question": question}).strip().upper()
+    try:
+        result = chain.invoke({"question": question}).strip().upper()
+    except Exception:
+        result = "DATABASE"  # Safe default on API error
     
     if result not in ["DATABASE", "WEB_SEARCH", "BOTH", "GENERAL"]:
         result = "DATABASE"
@@ -1844,8 +1847,17 @@ def process_question(question: str):
     # Add user message to display
     st.session_state.messages.append({"role": "user", "content": question})
     
-    # Generate response
-    response = generate_response(question)
+    # Generate response with error handling
+    try:
+        response = generate_response(question)
+    except Exception as e:
+        error_msg = str(e)
+        if "overloaded" in error_msg.lower() or "529" in error_msg or "OverloadedError" in error_msg:
+            response = {"text": "⏳ The AI service is temporarily busy. Please try your question again in a few seconds.", "chart_data": None}
+        elif "rate" in error_msg.lower() and "limit" in error_msg.lower():
+            response = {"text": "⏳ Rate limit reached. Please wait a moment and try again.", "chart_data": None}
+        else:
+            response = {"text": f"⚠️ Something went wrong. Please try again. If the issue persists, try refreshing the page.", "chart_data": None}
     
     # Add assistant response to display (store both text and chart data)
     st.session_state.messages.append({
@@ -1950,7 +1962,16 @@ if prompt := st.chat_input("Ask me anything about Minimum Wage Risk..."):
     # Generate and display response
     with st.chat_message("assistant"):
         with st.spinner("🔍 Analyzing..."):
-            response = generate_response(prompt)
+            try:
+                response = generate_response(prompt)
+            except Exception as e:
+                error_msg = str(e)
+                if "overloaded" in error_msg.lower() or "529" in error_msg or "OverloadedError" in error_msg:
+                    response = {"text": "⏳ The AI service is temporarily busy. Please try your question again in a few seconds.", "chart_data": None}
+                elif "rate" in error_msg.lower() and "limit" in error_msg.lower():
+                    response = {"text": "⏳ Rate limit reached. Please wait a moment and try again.", "chart_data": None}
+                else:
+                    response = {"text": "⚠️ Something went wrong. Please try again. If the issue persists, try refreshing the page.", "chart_data": None}
             st.markdown(response["text"])
             # Render chart if data present
             if response.get("chart_data") is not None:
