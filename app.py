@@ -261,6 +261,11 @@ if "graph_rag" not in st.session_state:
                 api_key=os.getenv("ANTHROPIC_API_KEY"),
                 max_tokens=4096
             )
+            st.session_state.llm_fast = ChatAnthropic(
+                model="claude-haiku-4-5-20251001",
+                api_key=os.getenv("ANTHROPIC_API_KEY"),
+                max_tokens=4096
+            )
             st.session_state.connected = True
             
             # Load cross-session memory for the authenticated user
@@ -347,7 +352,7 @@ Follow-up Question: {question}
 Rewritten standalone question:""")
     ])
     
-    chain = resolve_prompt | st.session_state.llm | StrOutputParser()
+    chain = resolve_prompt | st.session_state.llm_fast | StrOutputParser()
     
     try:
         resolved = chain.invoke({
@@ -374,7 +379,7 @@ Respond with ONLY one word: DATABASE, WEB_SEARCH, BOTH, or GENERAL"""),
         ("human", "{question}")
     ])
     
-    chain = prompt | st.session_state.llm | StrOutputParser()
+    chain = prompt | st.session_state.llm_fast | StrOutputParser()
     try:
         result = chain.invoke({"question": question}).strip().upper()
     except Exception:
@@ -502,7 +507,7 @@ Return ONLY one word: LINE_TREND, BAR_COMPARE, HBAR_RANK, or NONE"""),
         ("human", "{question}")
     ])
     
-    chain = chart_prompt | st.session_state.llm | StrOutputParser()
+    chain = chart_prompt | st.session_state.llm_fast | StrOutputParser()
     try:
         result = chain.invoke({"question": question}).strip().upper()
         if result not in ["LINE_TREND", "BAR_COMPARE", "HBAR_RANK", "NONE"]:
@@ -591,7 +596,7 @@ Return ONLY the Cypher query, nothing else."""),
         ("human", "{question}")
     ])
     
-    chain = cypher_prompt | st.session_state.llm | StrOutputParser()
+    chain = cypher_prompt | st.session_state.llm_fast | StrOutputParser()
     try:
         cypher = chain.invoke({"question": question}).strip().replace("```cypher", "").replace("```", "").strip()
     except:
@@ -1741,11 +1746,51 @@ def generate_response(question: str) -> dict:
     
     # Get database results if needed
     if q_type in ["DATABASE", "BOTH"]:
-        try:
-            db_result = st.session_state.graph_rag.answer_question(resolved_question)
-            context_parts.append(f"**Database Results:**\n{db_result['answer']}")
-        except Exception as e:
-            context_parts.append(f"Database query error: {e}")
+        # ── Direct CBSA/population density lookup for ZIP codes ──
+        # Bypass LLM Cypher for CBSA questions to ensure reliable results
+        import re
+        cbsa_zip_match = re.search(r'\b(\d{5})\b', resolved_question)
+        is_cbsa_question = cbsa_zip_match and any(kw in resolved_question.lower() for kw in [
+            'cbsa', 'classification', 'market class', 'division', 'rural', 
+            'population density', 'density', 'major market', 'metro'
+        ])
+        
+        if is_cbsa_question:
+            try:
+                zip_code = cbsa_zip_match.group(1)
+                driver = st.session_state.graph_rag.driver
+                with driver.session() as session:
+                    result = session.run("""
+                        MATCH (z:ZipCode {zip: $zip})
+                        RETURN z.zip AS zip, z.county AS county, z.state AS state,
+                               z.cbsa_classification AS cbsa_classification,
+                               z.cbsa_code AS cbsa_code,
+                               z.population_density_sq_mi AS population_density,
+                               z.preferred_city AS preferred_city
+                    """, zip=zip_code)
+                    record = result.single()
+                    if record and record["cbsa_classification"]:
+                        cbsa_info = (
+                            f"**CBSA Data for ZIP {zip_code}:**\n"
+                            f"- County: {record['county']}, {record['state']}\n"
+                            f"- CBSA Classification: {record['cbsa_classification']}\n"
+                            f"- CBSA Code: {record['cbsa_code']}\n"
+                            f"- Population Density: {record['population_density']} people per sq mile\n"
+                            f"- Preferred City: {record['preferred_city']}"
+                        )
+                        context_parts.append(cbsa_info)
+                    else:
+                        # Fall through to normal LLM query
+                        is_cbsa_question = False
+            except Exception:
+                is_cbsa_question = False
+        
+        if not is_cbsa_question:
+            try:
+                db_result = st.session_state.graph_rag.answer_question(resolved_question)
+                context_parts.append(f"**Database Results:**\n{db_result['answer']}")
+            except Exception as e:
+                context_parts.append(f"Database query error: {e}")
     
     # Get web results if needed
     if q_type in ["WEB_SEARCH", "BOTH"]:
