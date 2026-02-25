@@ -425,6 +425,14 @@ PERIOD_LABELS = {
     '2026-01': 'Jan 2026', '2026-02': 'Feb 2026'
 }
 
+def _county_label(county_name: str, state_abbr: str) -> str:
+    """Format county labels for charts: 'Montgomery' -> 'Montgomery County, MD'
+    Avoids double-labeling for names already containing 'County' or 'City'."""
+    name = str(county_name).strip()
+    if any(suffix in name for suffix in ['County', 'City', 'Parish', 'Borough']):
+        return f"{name}, {state_abbr}"
+    return f"{name} County, {state_abbr}"
+
 def should_generate_chart(question: str) -> bool:
     """Detect if a question would benefit from any type of chart"""
     chart_keywords = [
@@ -600,7 +608,7 @@ Return ONLY the Cypher query, nothing else."""),
             key = f"{r['county']}|{r['state']}"
             if key not in seen:
                 seen.add(key)
-                results.append({"label": f"{r['county']}, {r['state']}", "periods": r["periods"], "labor": r["labor"], "living": r["living"]})
+                results.append({"label": _county_label(r['county'], r['state']), "periods": r["periods"], "labor": r["labor"], "living": r["living"]})
     return results[:8]
 
 
@@ -835,7 +843,7 @@ def _fetch_county_trend_fallback(question: str) -> list:
                 r = records[0]
                 if r.get("periods") and r.get("labor"):
                     results.append({
-                        "label": f"{r['county']}, {r['state']}",
+                        "label": _county_label(r["county"], r["state"]),
                         "periods": r["periods"],
                         "labor": r["labor"],
                         "living": r["living"]
@@ -939,7 +947,7 @@ def _fetch_county_vs_state_trend(question: str) -> list:
             if records and records[0].get("periods"):
                 r = records[0]
                 results.append({
-                    "label": f"{r['county']}, {r['state']}",
+                    "label": _county_label(r["county"], r["state"]),
                     "periods": r["periods"],
                     "labor": r["labor"],
                     "living": r["living"]
@@ -1269,7 +1277,14 @@ def _fallback_ranked_query(question: str, limit: int) -> list:
     results = []
     for r in records:
         if r.get("label") is not None and r.get("value") is not None:
-            results.append({"label": str(r["label"]), "value": round(float(r["value"]), 1), "tier": r.get("tier")})
+            label = str(r["label"])
+            # Add "County" to county-level labels like "Montgomery, MD" -> "Montgomery County, MD"
+            import re
+            county_match = re.match(r'^([A-Za-z\s\.\'-]+),\s*([A-Z]{2})$', label)
+            if county_match:
+                county_name, state_abbr = county_match.groups()
+                label = _county_label(county_name.strip(), state_abbr)
+            results.append({"label": label, "value": round(float(r["value"]), 1), "tier": r.get("tier")})
     return results[:limit]
 
 
@@ -1615,12 +1630,35 @@ def generate_response(question: str) -> dict:
                     chart_error = f"type=LINE_TREND (overridden from BAR_COMPARE — trend detected)"
             
             if chart_type == "LINE_TREND":
-                data = fetch_trend_data(resolved_question)
-                # Validate: for comparison queries, LLM Cypher must return 2+ results
+                # Detect pure state-vs-state comparison and route directly
                 q_check_cmp = resolved_question.lower()
-                is_comparison = any(kw in q_check_cmp for kw in ['compare', ' vs ', ' vs.', 'versus', ' and '])
-                if data and is_comparison and len(data) < 2:
-                    data = []  # Force fallback — LLM returned partial results
+                state_names = ['alabama','alaska','arizona','arkansas','california','colorado','connecticut',
+                    'delaware','florida','georgia','hawaii','idaho','illinois','indiana','iowa','kansas',
+                    'kentucky','louisiana','maine','maryland','massachusetts','michigan','minnesota',
+                    'mississippi','missouri','montana','nebraska','nevada','new hampshire','new jersey',
+                    'new mexico','new york','north carolina','north dakota','ohio','oklahoma','oregon',
+                    'pennsylvania','rhode island','south carolina','south dakota','tennessee','texas',
+                    'utah','vermont','virginia','washington','west virginia','wisconsin','wyoming']
+                county_words = ['county', 'borough', 'parish', 'montgomery', 'baltimore', 'fairfax',
+                    'arlington', 'boulder', 'howard', 'san francisco', 'los angeles', 'cook',
+                    'harris', 'king county', 'manhattan', 'brooklyn', 'queens', 'bronx',
+                    'dallas', 'austin', 'phoenix', 'westchester', 'nassau', 'bergen',
+                    'anne arundel', 'prince george', 'frederick', 'charles', 'harford']
+                matched_states = [s for s in state_names if s in q_check_cmp]
+                has_county_word = any(kw in q_check_cmp for kw in county_words)
+                is_pure_state_compare = len(matched_states) >= 2 and not has_county_word
+                
+                data = None
+                if is_pure_state_compare:
+                    # Skip LLM Cypher entirely — go straight to state average computation
+                    data = _fetch_state_trend_compare(resolved_question)
+                
+                if not data:
+                    data = fetch_trend_data(resolved_question)
+                    # Validate: for comparison queries, LLM Cypher must return 2+ results
+                    is_comparison = any(kw in q_check_cmp for kw in ['compare', ' vs ', ' vs.', 'versus', ' and '])
+                    if data and is_comparison and len(data) < 2:
+                        data = []  # Force fallback — LLM returned partial results
                 if not data:
                     # Fallback 0: try county-vs-state comparison (e.g., "Montgomery County vs Maryland")
                     data = _fetch_county_vs_state_trend(resolved_question)
