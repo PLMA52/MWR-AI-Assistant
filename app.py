@@ -331,6 +331,14 @@ def resolve_follow_up(question: str) -> str:
     if not is_follow_up:
         return question  # Standalone question, no resolution needed
     
+    # Safety: If the question contains known city names from our resolver,
+    # it's likely a standalone query that just happens to contain words like "compare" or "vs".
+    # Don't risk the LLM rewriting and losing the city names.
+    city_check = _resolve_city_to_county(question)
+    if city_check and len(city_check) >= 1:
+        # Question has specific city names — treat as standalone to preserve them
+        return question
+    
     # Use LLM to resolve the follow-up into a standalone question
     resolve_prompt = ChatPromptTemplate.from_messages([
         ("system", """You are a question resolver. Given the conversation history and a follow-up question, 
@@ -1870,13 +1878,21 @@ def generate_response(question: str) -> dict:
                 is_pure_state_compare = len(matched_states) >= 2 and not has_county_word
                 
                 data = None
+                city_was_detected = False  # Track if cities were found (prevents LLM Cypher fallback)
                 
                 # Priority 0: Try city-to-county resolution FIRST
-                # This handles "Buffalo, New York" → Erie County, NY correctly
-                # and prevents wrong matches like Buffalo County, WI
+                # Check BOTH the resolved question AND the original question
+                # (follow-up resolver may rewrite the question and lose city names)
                 city_resolved = _resolve_city_to_county(resolved_question)
+                if not city_resolved:
+                    city_resolved = _resolve_city_to_county(question)
+                
                 if city_resolved and not has_county_word:
+                    city_was_detected = True
+                    # Try fetching from both resolved and original question
                     data = _fetch_city_trend_comparison(resolved_question)
+                    if not data:
+                        data = _fetch_city_trend_comparison(question)
                     if data:
                         chart_error += " (city→county resolved)"
                 
@@ -1884,7 +1900,9 @@ def generate_response(question: str) -> dict:
                     # Skip LLM Cypher entirely — go straight to state average computation
                     data = _fetch_state_trend_compare(resolved_question)
                 
-                if not data:
+                # ONLY use LLM Cypher if NO cities were detected
+                # When cities are detected, LLM Cypher is dangerous (matches wrong counties like Buffalo County, WI)
+                if not data and not city_was_detected:
                     data = fetch_trend_data(resolved_question)
                     # Validate: for comparison queries, LLM Cypher must return 2+ results
                     is_comparison = any(kw in q_check_cmp for kw in ['compare', ' vs ', ' vs.', 'versus', ' and '])
@@ -1908,11 +1926,19 @@ def generate_response(question: str) -> dict:
             
             elif chart_type == "BAR_COMPARE":
                 # Try city-to-county resolution first for bar comparisons too
+                # Check BOTH resolved and original question (same as LINE_TREND fix)
                 city_resolved = _resolve_city_to_county(resolved_question)
+                if not city_resolved:
+                    city_resolved = _resolve_city_to_county(question)
                 data = None
+                city_was_detected = False
                 if city_resolved:
+                    city_was_detected = True
                     data = _fetch_city_trend_comparison(resolved_question)
-                if not data:
+                    if not data:
+                        data = _fetch_city_trend_comparison(question)
+                # ONLY use LLM Cypher if NO cities were detected
+                if not data and not city_was_detected:
                     data = fetch_trend_data(resolved_question)
                 if not data:
                     # Fallback: try state-level comparison using current values instead of time-series
