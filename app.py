@@ -1975,8 +1975,10 @@ def _try_direct_county_lookup(question: str) -> str:
                 city_match = (county, st)
                 break
         if not city_match:
+            print(f"[DIRECT_COUNTY] No 'county' keyword and no city match found")
             return ""
         target_county, target_state = city_match
+        print(f"[DIRECT_COUNTY] City match: {target_county}, {target_state}")
     else:
         # Extract county name and state from the question
         import re
@@ -1989,13 +1991,16 @@ def _try_direct_county_lookup(question: str) -> str:
         if state_match:
             state_str = state_match.group(1)
             county_end = state_match.start()
+            print(f"[DIRECT_COUNTY] State match: '{state_str}', county_end={county_end}")
         else:
             # Try 2-letter abbreviation
             abbr_match = re.search(r'county[\s,]+([a-z]{2})\b', q_clean)
             if abbr_match:
                 state_str = abbr_match.group(1).upper()
                 county_end = abbr_match.start()
+                print(f"[DIRECT_COUNTY] Abbr match: '{state_str}', county_end={county_end}")
             else:
+                print(f"[DIRECT_COUNTY] No state found after 'county' in: '{q_clean}'")
                 return ""
         
         # Step 2: Get county name = last 1-3 non-stop-words before 'county'
@@ -2012,9 +2017,11 @@ def _try_direct_county_lookup(question: str) -> str:
                 break
         
         if not county_words:
+            print(f"[DIRECT_COUNTY] No county words extracted from: '{before_county}'")
             return ""
         
         target_county = ' '.join(county_words).title()
+        print(f"[DIRECT_COUNTY] Extracted: county='{target_county}', state_str='{state_str}'")
         
         # Convert state name to abbreviation
         if len(state_str) == 2 and state_str.isupper():
@@ -2059,6 +2066,7 @@ def _try_direct_county_lookup(question: str) -> str:
             
             record = result.single()
             if not record or record["zip_count"] == 0:
+                print(f"[DIRECT_COUNTY] Neo4j returned 0 results for county='{target_county}', state='{target_state}'")
                 # Try case variations
                 for variant in [target_county.lower(), target_county.upper(), target_county]:
                     result2 = session.run("""
@@ -2071,6 +2079,7 @@ def _try_direct_county_lookup(question: str) -> str:
                 return ""
             
             # Format the response
+            print(f"[DIRECT_COUNTY] SUCCESS: Found {record['zip_count']} ZIPs for {target_county}, {target_state}")
             parts = [f"**{target_county} County, {target_state} — County Profile ({record['zip_count']} ZIP codes):**\n"]
             
             if wants_risk or wants_all:
@@ -2393,6 +2402,7 @@ def generate_response(question: str) -> dict:
     
     # Get database results if needed
     if q_type in ["DATABASE", "BOTH"]:
+        print(f"[DIRECT_COUNTY] q_type={q_type}, entering DATABASE block")
         # ── Direct CBSA/population density lookup for ZIP codes ──
         # Bypass LLM Cypher for CBSA questions to ensure reliable results
         import re
@@ -2436,10 +2446,13 @@ def generate_response(question: str) -> dict:
             # ── Direct county-level data lookup ──
             # Bypass LLM Cypher for single-county data requests (risk, cost, unemployment, etc.)
             # These fail frequently with LLM-generated Cypher due to formatting issues
+            print(f"[DIRECT_COUNTY] Attempting lookup for: '{resolved_question}'")
             direct_county_result = _try_direct_county_lookup(resolved_question)
             if direct_county_result:
+                print(f"[DIRECT_COUNTY] SUCCESS — got result ({len(direct_county_result)} chars)")
                 context_parts.append(f"**Database Results:**\n{direct_county_result}")
             else:
+                print(f"[DIRECT_COUNTY] No match — falling through to LLM Cypher")
                 try:
                     db_result = st.session_state.graph_rag.answer_question(resolved_question)
                     context_parts.append(f"**Database Results:**\n{db_result['answer']}")
