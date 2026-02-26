@@ -491,7 +491,7 @@ CITY_TO_COUNTY = {
     'plano': ('Collin', 'TX'),
     'arlington': ('Tarrant', 'TX'),
     # Florida
-    'miami': ('Miami-Dade', 'FL'),
+    'miami': ('Miami-dade', 'FL'),
     'orlando': ('Orange', 'FL'),
     'tampa': ('Hillsborough', 'FL'),
     'jacksonville': ('Duval', 'FL'),
@@ -659,6 +659,39 @@ def _fetch_city_trend_comparison(question: str) -> list:
                     LIMIT 1
                 """, county=county, state=state))
                 
+                # Fuzzy fallback: try alternate name formats (hyphen vs space, with/without suffix)
+                if not records:
+                    alt_names = set()
+                    if '-' in county:
+                        alt_names.add(county.replace('-', ' '))   # Miami-dade → Miami dade
+                    else:
+                        alt_names.add(county.replace(' ', '-'))   # Miami Dade → Miami-Dade
+                    # Also try with/without "County" suffix
+                    alt_names.add(f"{county} County")
+                    
+                    for alt in alt_names:
+                        records = list(session.run("""
+                            MATCH (z:ZipCode)
+                            WHERE z.county = $county AND z.state = $state AND z.eri_periods IS NOT NULL
+                            RETURN DISTINCT z.county AS county, z.state AS state,
+                                   z.eri_periods AS periods, z.eri_labor_history AS labor,
+                                   z.eri_living_history AS living
+                            LIMIT 1
+                        """, county=alt, state=state))
+                        if records:
+                            break
+                
+                # Last resort: case-insensitive match
+                if not records:
+                    records = list(session.run("""
+                        MATCH (z:ZipCode)
+                        WHERE toLower(z.county) = toLower($county) AND z.state = $state AND z.eri_periods IS NOT NULL
+                        RETURN DISTINCT z.county AS county, z.state AS state,
+                               z.eri_periods AS periods, z.eri_labor_history AS labor,
+                               z.eri_living_history AS living
+                        LIMIT 1
+                    """, county=county, state=state))
+                
                 if records:
                     r = dict(records[0])
                     results.append({
@@ -687,7 +720,7 @@ def _detect_explicit_counties(question: str) -> list:
     # Maps the lowercase keyword to (Neo4j county name, default state)
     known_counties = {
         'broward': ('Broward', 'FL'),
-        'miami-dade': ('Miami-Dade', 'FL'), 'miami dade': ('Miami-Dade', 'FL'),
+        'miami-dade': ('Miami-dade', 'FL'), 'miami dade': ('Miami-dade', 'FL'),
         'palm beach': ('Palm Beach', 'FL'), 'hillsborough': ('Hillsborough', 'FL'),
         'orange': ('Orange', 'FL'),  # Could be FL or CA — check state context
         'duval': ('Duval', 'FL'), 'pinellas': ('Pinellas', 'FL'),
@@ -1095,7 +1128,7 @@ def _fetch_county_trend_fallback(question: str) -> list:
         'fairfax': ('Fairfax', 'VA'),
         'arlington': ('Arlington', 'VA'),
         'howard': ('Howard', 'MD'),
-        'miami': ('Miami-Dade', 'FL'),
+        'miami': ('Miami-dade', 'FL'),
         'cook county': ('Cook', 'IL'),
         'chicago': ('Cook', 'IL'),
         'harris county': ('Harris', 'TX'),
@@ -1204,7 +1237,7 @@ def _fetch_county_vs_state_trend(question: str) -> list:
         'denver': ('Denver', 'CO'), 'montgomery county': ('Montgomery', 'MD'),
         'montgomery': ('Montgomery', 'MD'), 'fairfax': ('Fairfax', 'VA'),
         'arlington': ('Arlington', 'VA'), 'howard county': ('Howard', 'MD'),
-        'howard': ('Howard', 'MD'), 'miami': ('Miami-Dade', 'FL'),
+        'howard': ('Howard', 'MD'), 'miami': ('Miami-dade', 'FL'),
         'cook county': ('Cook', 'IL'), 'chicago': ('Cook', 'IL'),
         'harris county': ('Harris', 'TX'), 'houston': ('Harris', 'TX'),
         'king county': ('King', 'WA'), 'seattle': ('King', 'WA'),
