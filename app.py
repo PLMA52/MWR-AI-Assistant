@@ -1958,6 +1958,180 @@ def create_chart(chart_type: str, data: list, question: str) -> go.Figure:
     return None
 
 
+def _try_direct_county_lookup(question: str) -> str:
+    """Direct county-level data lookup that bypasses LLM Cypher.
+    Handles queries like 'what is the risk score for Montgomery County, Maryland'
+    or 'cost of labor in Fairfax County, Virginia'.
+    Returns formatted string with county data, or empty string if not a county lookup."""
+    
+    q_lower = question.lower()
+    
+    # Must mention a specific county
+    if 'county' not in q_lower:
+        # Also check for city names that map to counties
+        city_match = None
+        for city_name, (county, st) in CITY_TO_COUNTY.items():
+            if city_name in q_lower:
+                city_match = (county, st)
+                break
+        if not city_match:
+            return ""
+        target_county, target_state = city_match
+    else:
+        # Extract county name and state from the question
+        import re
+        q_clean = q_lower.rstrip('?').strip()
+        
+        states_pattern = 'alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|georgia|hawaii|idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|massachusetts|michigan|minnesota|mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|new mexico|new york|north carolina|north dakota|ohio|oklahoma|oregon|pennsylvania|rhode island|south carolina|south dakota|tennessee|texas|utah|vermont|virginia|washington|west virginia|wisconsin|wyoming'
+        
+        # Step 1: Find state after 'county'
+        state_match = re.search(r'county[\s,]+(' + states_pattern + r')', q_clean)
+        if state_match:
+            state_str = state_match.group(1)
+            county_end = state_match.start()
+        else:
+            # Try 2-letter abbreviation
+            abbr_match = re.search(r'county[\s,]+([a-z]{2})\b', q_clean)
+            if abbr_match:
+                state_str = abbr_match.group(1).upper()
+                county_end = abbr_match.start()
+            else:
+                return ""
+        
+        # Step 2: Get county name = last 1-3 non-stop-words before 'county'
+        before_county = q_clean[:county_end].strip()
+        words = before_county.split()
+        stop_words = {'for', 'in', 'about', 'of', 'the', 'is', 'are', 'to', 'and', 'or', 
+                      'a', 'an', 'at', 'by', 'what', 'how', 'tell', 'me', 'show', 'get', 'find'}
+        county_words = []
+        for word in reversed(words):
+            if word in stop_words:
+                break
+            county_words.insert(0, word)
+            if len(county_words) >= 3:
+                break
+        
+        if not county_words:
+            return ""
+        
+        target_county = ' '.join(county_words).title()
+        
+        # Convert state name to abbreviation
+        if len(state_str) == 2 and state_str.isupper():
+            target_state = state_str
+        else:
+            target_state = STATE_ABBR.get(state_str.lower(), state_str.upper())
+    
+    # Determine what data to fetch
+    wants_risk = any(kw in q_lower for kw in ['risk', 'score', 'tier'])
+    wants_labor = any(kw in q_lower for kw in ['cost of labor', 'labor cost', 'labor index'])
+    wants_living = any(kw in q_lower for kw in ['cost of living', 'living cost', 'living index'])
+    wants_unemployment = any(kw in q_lower for kw in ['unemployment', 'jobless'])
+    wants_education = any(kw in q_lower for kw in ['education', 'educated', 'bachelor', 'degree', 'diploma'])
+    wants_income = any(kw in q_lower for kw in ['income', 'salary', 'wage', 'earning'])
+    wants_population = any(kw in q_lower for kw in ['population', 'workforce', 'people'])
+    
+    # If no specific metric detected, fetch everything (general county query)
+    wants_all = not any([wants_risk, wants_labor, wants_living, wants_unemployment, 
+                         wants_education, wants_income, wants_population])
+    
+    try:
+        driver = st.session_state.graph_rag.driver
+        with driver.session() as session:
+            result = session.run("""
+                MATCH (z:ZipCode) WHERE toLower(z.county) = toLower($county) AND z.state = $state
+                WITH avg(z.newRiskScorePct) AS avg_risk,
+                     avg(z.cost_of_labor) AS avg_labor,
+                     avg(z.cost_of_living) AS avg_living,
+                     avg(z.unemployment_rate) AS avg_unemployment,
+                     avg(z.median_household_income) AS avg_income,
+                     avg(z.pct_bachelors) AS avg_bachelors,
+                     avg(z.pct_graduate) AS avg_graduate,
+                     avg(z.pct_no_diploma) AS avg_no_diploma,
+                     avg(z.workforce_population) AS avg_workforce,
+                     avg(z.total_population) AS avg_population,
+                     avg(z.population_density_sq_mi) AS avg_density,
+                     count(z) AS zip_count
+                RETURN avg_risk, avg_labor, avg_living, avg_unemployment, avg_income,
+                       avg_bachelors, avg_graduate, avg_no_diploma, avg_workforce, 
+                       avg_population, avg_density, zip_count
+            """, county=target_county, state=target_state)
+            
+            record = result.single()
+            if not record or record["zip_count"] == 0:
+                # Try case variations
+                for variant in [target_county.lower(), target_county.upper(), target_county]:
+                    result2 = session.run("""
+                        MATCH (z:ZipCode) WHERE toLower(z.county) = toLower($county) AND z.state = $state
+                        RETURN count(z) AS cnt
+                    """, county=variant, state=target_state)
+                    r2 = result2.single()
+                    if r2 and r2["cnt"] > 0:
+                        break
+                return ""
+            
+            # Format the response
+            parts = [f"**{target_county} County, {target_state} — County Profile ({record['zip_count']} ZIP codes):**\n"]
+            
+            if wants_risk or wants_all:
+                risk = record["avg_risk"]
+                if risk is not None:
+                    tier = "Critical" if risk >= 80 else "High" if risk >= 60 else "Elevated" if risk >= 40 else "Moderate" if risk >= 20 else "Low"
+                    parts.append(f"- **Risk Score:** {risk:.1f}% ({tier} tier)")
+            
+            if wants_labor or wants_all:
+                labor = record["avg_labor"]
+                if labor is not None:
+                    diff = labor - 100
+                    direction = "above" if diff > 0 else "below"
+                    parts.append(f"- **Cost of Labor Index:** {labor:.1f} ({abs(diff):.1f}% {direction} national average)")
+            
+            if wants_living or wants_all:
+                living = record["avg_living"]
+                if living is not None:
+                    diff = living - 100
+                    direction = "above" if diff > 0 else "below"
+                    parts.append(f"- **Cost of Living Index:** {living:.1f} ({abs(diff):.1f}% {direction} national average)")
+            
+            if wants_unemployment or wants_all:
+                unemp = record["avg_unemployment"]
+                if unemp is not None:
+                    parts.append(f"- **Unemployment Rate:** {unemp:.1f}%")
+            
+            if wants_income or wants_all:
+                income = record["avg_income"]
+                if income is not None:
+                    parts.append(f"- **Median Household Income:** ${income:,.0f}")
+            
+            if wants_education or wants_all:
+                bachelors = record["avg_bachelors"]
+                graduate = record["avg_graduate"]
+                no_diploma = record["avg_no_diploma"]
+                if bachelors is not None and graduate is not None:
+                    parts.append(f"- **College Educated:** {(bachelors + graduate):.1f}% (Bachelor's: {bachelors:.1f}%, Graduate: {graduate:.1f}%)")
+                if no_diploma is not None:
+                    parts.append(f"- **No Diploma:** {no_diploma:.1f}%")
+            
+            if wants_population or wants_all:
+                pop = record["avg_population"]
+                workforce = record["avg_workforce"]
+                density = record["avg_density"]
+                if pop is not None:
+                    parts.append(f"- **Total Population:** {int(pop):,}")
+                if workforce is not None:
+                    parts.append(f"- **Workforce Population (18-64):** {int(workforce):,}")
+                if density is not None:
+                    parts.append(f"- **Population Density:** {density:.0f} per sq mi")
+            
+            return "\n".join(parts)
+    
+    except Exception as e:
+        print(f"[DIRECT_COUNTY] Error looking up {target_county}, {target_state}: {e}")
+        import traceback
+        traceback.print_exc()
+        return ""
+
+
 def generate_response(question: str) -> dict:
     """Generate comprehensive response with session memory. Returns dict with 'text' and optional 'chart'."""
     
@@ -2259,11 +2433,18 @@ def generate_response(question: str) -> dict:
                 is_cbsa_question = False
         
         if not is_cbsa_question:
-            try:
-                db_result = st.session_state.graph_rag.answer_question(resolved_question)
-                context_parts.append(f"**Database Results:**\n{db_result['answer']}")
-            except Exception as e:
-                context_parts.append(f"Database query error: {e}")
+            # ── Direct county-level data lookup ──
+            # Bypass LLM Cypher for single-county data requests (risk, cost, unemployment, etc.)
+            # These fail frequently with LLM-generated Cypher due to formatting issues
+            direct_county_result = _try_direct_county_lookup(resolved_question)
+            if direct_county_result:
+                context_parts.append(f"**Database Results:**\n{direct_county_result}")
+            else:
+                try:
+                    db_result = st.session_state.graph_rag.answer_question(resolved_question)
+                    context_parts.append(f"**Database Results:**\n{db_result['answer']}")
+                except Exception as e:
+                    context_parts.append(f"Database query error: {e}")
     
     # Get web results if needed
     if q_type in ["WEB_SEARCH", "BOTH"]:
