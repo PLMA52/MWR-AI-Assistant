@@ -809,18 +809,28 @@ def _detect_explicit_counties(question: str) -> list:
 def _detect_state_near_keyword(q_lower: str, keyword: str, default_state: str) -> str:
     """Look for a state name or abbreviation near a keyword in the question.
     Returns the matched state abbreviation, or the default if none found."""
+    import re as _re
     pos = q_lower.find(keyword)
     if pos < 0:
         return default_state
     
-    # Look in a window around the keyword
-    window_start = max(0, pos - 30)
-    window_end = min(len(q_lower), pos + len(keyword) + 40)
-    window = q_lower[window_start:window_end]
+    # Look in a window AFTER the keyword (state usually follows county name)
+    after_start = pos + len(keyword)
+    after_end = min(len(q_lower), after_start + 30)
+    after_window = q_lower[after_start:after_end].strip().lstrip(',').strip()
     
+    # First: check for full state name right after the keyword
     for state_name, abbr in sorted(STATE_ABBR.items(), key=lambda x: -len(x[0])):
-        if state_name in window or f" {abbr.lower()} " in f" {window} " or f",{abbr.lower()}" in window or f", {abbr.lower()}" in window:
+        if after_window.startswith(state_name):
             return abbr
+    
+    # Second: check for 2-letter abbreviation right after keyword (with word boundary)
+    abbr_match = _re.match(r'^[,\s]*([a-z]{2})\b', after_window)
+    if abbr_match:
+        found_abbr = abbr_match.group(1).upper()
+        # Verify it's a real state abbreviation
+        if found_abbr in STATE_ABBR.values():
+            return found_abbr
     
     return default_state
 
