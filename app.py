@@ -1486,6 +1486,12 @@ SORTING:
 - "top", "highest", "most expensive", "riskiest" → ORDER BY value DESC
 - "lowest", "cheapest", "safest", "least" → ORDER BY value ASC
 
+STATE FILTERING:
+- If the question mentions a specific state (e.g., "counties in Maryland", "riskiest counties in Texas"), 
+  ADD a WHERE clause: z.state = 'MD' (use the 2-letter abbreviation)
+- "top 5 riskiest counties in Maryland" → WHERE z.newRiskScorePct IS NOT NULL AND z.state = 'MD'
+- "most expensive counties in California" → WHERE z.cost_of_living IS NOT NULL AND z.cost_of_living > 0 AND z.state = 'CA'
+
 Return ONLY the Cypher query. No explanations, no markdown."""),
         ("human", "Question: {question}\nLimit: {limit}")
     ])
@@ -1546,6 +1552,23 @@ def _fallback_ranked_query(question: str, limit: int) -> list:
     is_ascending = any(kw in q_lower for kw in ['lowest', 'safest', 'least', 'cheapest', 'bottom'])
     order = "ASC" if is_ascending else "DESC"
     
+    # Detect state filter: "counties in Maryland" → filter to MD only
+    state_filter = ""
+    state_filter_label = ""
+    for state_name, state_abbr in STATE_ABBR.items():
+        if state_name in q_lower:
+            state_filter = f" AND z.state = '{state_abbr}'"
+            state_filter_label = f" in {state_name.title()}"
+            break
+    # Also check for 2-letter abbreviations like "in MD", "in TX"
+    if not state_filter:
+        import re as _re2
+        abbr_match = _re2.search(r'\bin\s+([A-Z]{2})\b', question)
+        if abbr_match:
+            abbr = abbr_match.group(1)
+            if abbr in STATE_ABBR.values():
+                state_filter = f" AND z.state = '{abbr}'"
+    
     # Select the right query
     if any(kw in q_lower for kw in ['county', 'counties']):
         # County-level ranking
@@ -1556,14 +1579,14 @@ def _fallback_ranked_query(question: str, limit: int) -> list:
             # Education needs special Cypher — combined field or pct_no_diploma
             if is_no_diploma:
                 cypher = f"""
-                MATCH (z:ZipCode) WHERE z.pct_no_diploma IS NOT NULL
+                MATCH (z:ZipCode) WHERE z.pct_no_diploma IS NOT NULL{state_filter}
                 WITH z.county + ', ' + z.state AS label, avg(z.pct_no_diploma) AS value
                 RETURN label, value, null AS tier
                 ORDER BY value {order} LIMIT {limit}
                 """
             else:
                 cypher = f"""
-                MATCH (z:ZipCode) WHERE z.pct_bachelors IS NOT NULL AND z.pct_graduate IS NOT NULL
+                MATCH (z:ZipCode) WHERE z.pct_bachelors IS NOT NULL AND z.pct_graduate IS NOT NULL{state_filter}
                 WITH z.county + ', ' + z.state AS label, avg(z.pct_bachelors + z.pct_graduate) AS value
                 RETURN label, value, null AS tier
                 ORDER BY value {order} LIMIT {limit}
@@ -1585,7 +1608,7 @@ def _fallback_ranked_query(question: str, limit: int) -> list:
                 where = "z.newRiskScorePct IS NOT NULL"
             
             cypher = f"""
-            MATCH (z:ZipCode) WHERE {where}
+            MATCH (z:ZipCode) WHERE {where}{state_filter}
             WITH z.county + ', ' + z.state AS label, avg(z.{field}) AS value
             RETURN label, value, {tier_expr} AS tier
             ORDER BY value {order} LIMIT {limit}
