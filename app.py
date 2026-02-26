@@ -672,6 +672,7 @@ def _fetch_city_trend_comparison(question: str) -> list:
     for county, state in cities:
         try:
             with driver.session() as session:
+                print(f"[CITY_TREND] Querying county='{county}', state='{state}'")
                 records = list(session.run("""
                     MATCH (z:ZipCode)
                     WHERE z.county = $county AND z.state = $state AND z.eri_periods IS NOT NULL
@@ -721,6 +722,7 @@ def _fetch_city_trend_comparison(question: str) -> list:
                 
                 if records:
                     r = dict(records[0])
+                    print(f"[CITY_TREND] SUCCESS: {county}, {state} → label='{_county_label(r['county'], r['state'])}'")
                     results.append({
                         "label": _county_label(r['county'], r['state']),
                         "county": r['county'],
@@ -729,6 +731,8 @@ def _fetch_city_trend_comparison(question: str) -> list:
                         "labor": r['labor'],
                         "living": r['living']
                     })
+                else:
+                    print(f"[CITY_TREND] FAILED: No ERI data found for county='{county}', state='{state}' after all fallbacks")
         except Exception as e:
             import traceback
             print(f"[CITY_TREND] Error fetching {county}, {state}: {e}")
@@ -2398,6 +2402,24 @@ def generate_response(question: str) -> dict:
                     + "\n".join(trend_summary_parts)
                     + "\n\nIMPORTANT: The chart IS displaying successfully. Do NOT say data is missing or there was an error. "
                     "Provide business analysis of the trends shown."
+                )
+        
+        # HBAR ranking chart data injection
+        if cd["chart_type"] == "HBAR_RANK" and cd["data"]:
+            rank_summary_parts = []
+            for item in cd["data"][:10]:
+                label = item.get("label", "Unknown")
+                value = item.get("value", 0)
+                tier = item.get("tier", "")
+                tier_str = f" ({tier})" if tier else ""
+                rank_summary_parts.append(f"- {label}: {value:.1f}{tier_str}")
+            if rank_summary_parts:
+                context_parts.append(
+                    "**Chart Data Successfully Retrieved (ranking):**\n"
+                    "The chart below shows the ranked data. Key results:\n"
+                    + "\n".join(rank_summary_parts)
+                    + "\n\nIMPORTANT: The chart IS displaying successfully. Do NOT say data is missing or there was an error. "
+                    "Provide business analysis of the ranking shown."
                 )
     
     # Get database results if needed
