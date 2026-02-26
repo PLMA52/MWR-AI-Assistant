@@ -446,10 +446,27 @@ def _county_label(county_name: str, state_abbr: str) -> str:
     Avoids double-labeling for names already containing 'County' or 'City'.
     Also title-cases names from Neo4j (e.g., 'Miami-dade' → 'Miami-Dade')."""
     name = str(county_name).strip()
+    
+    # Special case: DC should just be "Washington DC" not "District of Columbia County, DC"
+    if name.lower().replace(' ', '') == 'districtofcolumbia' or (state_abbr == 'DC'):
+        return "Washington DC"
+    
     # Title-case each part (handles hyphens: 'Miami-dade' → 'Miami-Dade')
     name = '-'.join(part.capitalize() if part.islower() else part for part in name.split('-'))
     # Also handle space-separated words that may be lowercase
-    name = ' '.join(word.capitalize() if word.islower() else word for word in name.split())
+    # Keep small words (of, the, and, in) lowercase unless they're the first word
+    small_words = {'of', 'the', 'and', 'in', 'at', 'by', 'for', 'on', 'to'}
+    words = name.split()
+    titled = []
+    for i, word in enumerate(words):
+        if word.islower() and i > 0 and word in small_words:
+            titled.append(word)
+        elif word.islower():
+            titled.append(word.capitalize())
+        else:
+            titled.append(word)
+    name = ' '.join(titled)
+    
     if any(suffix in name for suffix in ['County', 'City', 'Parish', 'Borough']):
         return f"{name}, {state_abbr}"
     return f"{name} County, {state_abbr}"
