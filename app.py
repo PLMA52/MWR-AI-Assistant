@@ -625,8 +625,22 @@ def _resolve_city_to_county(question: str) -> list:
 
 def _fetch_city_trend_comparison(question: str) -> list:
     """Fetch trend data for city-based queries by resolving cities to counties first.
-    Handles queries like 'Compare Buffalo NY to New York City NY'."""
+    Handles queries like 'Compare Buffalo NY to New York City NY'.
+    Also detects explicit county names (e.g., 'Broward County') mixed with city names."""
     cities = _resolve_city_to_county(question)
+    
+    # Also detect explicit county names in the question that aren't in CITY_TO_COUNTY
+    # This handles mixed queries like "Miami vs Broward County, Florida"
+    explicit_counties = _detect_explicit_counties(question)
+    
+    # Merge: add explicit counties that aren't already covered by city resolution
+    city_keys = set(f"{c}|{s}" for c, s in cities)
+    for county, state in explicit_counties:
+        key = f"{county}|{state}"
+        if key not in city_keys:
+            cities.append((county, state))
+            city_keys.add(key)
+    
     if not cities:
         return []
     
@@ -659,6 +673,89 @@ def _fetch_city_trend_comparison(question: str) -> list:
             continue
     
     return results if len(results) >= 1 else []
+
+
+def _detect_explicit_counties(question: str) -> list:
+    """Detect explicit county names in a question (e.g., 'Broward County', 'Cook County').
+    Returns list of (county_name, state_abbr) tuples.
+    Uses pattern matching for '[Name] County' and resolves state from context."""
+    
+    q_lower = question.lower()
+    found = []
+    
+    # Known county names that appear as "[Name] County" in user queries
+    # Maps the lowercase keyword to (Neo4j county name, default state)
+    known_counties = {
+        'broward': ('Broward', 'FL'),
+        'miami-dade': ('Miami-Dade', 'FL'), 'miami dade': ('Miami-Dade', 'FL'),
+        'palm beach': ('Palm Beach', 'FL'), 'hillsborough': ('Hillsborough', 'FL'),
+        'orange': ('Orange', 'FL'),  # Could be FL or CA — check state context
+        'duval': ('Duval', 'FL'), 'pinellas': ('Pinellas', 'FL'),
+        'cook': ('Cook', 'IL'), 'dupage': ('DuPage', 'IL'), 'kane': ('Kane', 'IL'),
+        'lake': ('Lake', 'IL'),
+        'harris': ('Harris', 'TX'), 'dallas': ('Dallas', 'TX'), 'tarrant': ('Tarrant', 'TX'),
+        'bexar': ('Bexar', 'TX'), 'travis': ('Travis', 'TX'),
+        'king': ('King', 'WA'), 'pierce': ('Pierce', 'WA'), 'snohomish': ('Snohomish', 'WA'),
+        'montgomery': ('Montgomery', 'MD'), 'howard': ('Howard', 'MD'),
+        'anne arundel': ('Anne Arundel', 'MD'), 'prince georges': ('Prince Georges', 'MD'),
+        "prince george's": ('Prince Georges', 'MD'), 'prince george': ('Prince Georges', 'MD'),
+        'baltimore': ('Baltimore', 'MD'), 'frederick': ('Frederick', 'MD'),
+        'charles': ('Charles', 'MD'), 'harford': ('Harford', 'MD'),
+        'fairfax': ('Fairfax', 'VA'), 'arlington': ('Arlington', 'VA'),
+        'loudoun': ('Loudoun', 'VA'),
+        'westchester': ('Westchester', 'NY'), 'nassau': ('Nassau', 'NY'),
+        'suffolk': ('Suffolk', 'NY'), 'erie': ('Erie', 'NY'),
+        'bergen': ('Bergen', 'NJ'), 'essex': ('Essex', 'NJ'), 'hudson': ('Hudson', 'NJ'),
+        'middlesex': ('Middlesex', 'NJ'),
+        'alameda': ('Alameda', 'CA'), 'santa clara': ('Santa Clara', 'CA'),
+        'san mateo': ('San Mateo', 'CA'), 'contra costa': ('Contra Costa', 'CA'),
+        'marin': ('Marin', 'CA'),
+        'boulder': ('Boulder', 'CO'), 'denver': ('Denver', 'CO'),
+        'arapahoe': ('Arapahoe', 'CO'), 'jefferson': ('Jefferson', 'CO'),
+        'maricopa': ('Maricopa', 'AZ'), 'pima': ('Pima', 'AZ'),
+        'fulton': ('Fulton', 'GA'), 'dekalb': ('DeKalb', 'GA'), 'cobb': ('Cobb', 'GA'),
+        'wayne': ('Wayne', 'MI'), 'oakland': ('Oakland', 'MI'),
+        'hennepin': ('Hennepin', 'MN'), 'ramsey': ('Ramsey', 'MN'),
+        'multnomah': ('Multnomah', 'OR'), 'clackamas': ('Clackamas', 'OR'),
+        'franklin': ('Franklin', 'OH'), 'cuyahoga': ('Cuyahoga', 'OH'),
+        'hamilton': ('Hamilton', 'OH'),
+        'mecklenburg': ('Mecklenburg', 'NC'), 'wake': ('Wake', 'NC'),
+        'marion': ('Marion', 'IN'), 'davidson': ('Davidson', 'TN'),
+        'shelby': ('Shelby', 'TN'), 'orleans': ('Orleans', 'LA'),
+        'clark': ('Clark', 'NV'), 'salt lake': ('Salt Lake', 'UT'),
+    }
+    
+    # Look for "[name] county" pattern
+    for name, (neo4j_name, default_state) in sorted(known_counties.items(), key=lambda x: -len(x[0])):
+        # Match "broward county" or just "broward" if followed by context clues
+        pattern_with_county = f"{name} county"
+        if pattern_with_county in q_lower:
+            # Check if a state is specified nearby to override default
+            state = _detect_state_near_keyword(q_lower, pattern_with_county, default_state)
+            found.append((neo4j_name, state))
+            # Prevent re-matching sub-strings
+            q_lower = q_lower.replace(pattern_with_county, '___county_matched___', 1)
+    
+    return found
+
+
+def _detect_state_near_keyword(q_lower: str, keyword: str, default_state: str) -> str:
+    """Look for a state name or abbreviation near a keyword in the question.
+    Returns the matched state abbreviation, or the default if none found."""
+    pos = q_lower.find(keyword)
+    if pos < 0:
+        return default_state
+    
+    # Look in a window around the keyword
+    window_start = max(0, pos - 30)
+    window_end = min(len(q_lower), pos + len(keyword) + 40)
+    window = q_lower[window_start:window_end]
+    
+    for state_name, abbr in sorted(STATE_ABBR.items(), key=lambda x: -len(x[0])):
+        if state_name in window or f" {abbr.lower()} " in f" {window} " or f",{abbr.lower()}" in window or f", {abbr.lower()}" in window:
+            return abbr
+    
+    return default_state
 
 def should_generate_chart(question: str) -> bool:
     """Detect if a question would benefit from any type of chart"""
@@ -1887,9 +1984,17 @@ def generate_response(question: str) -> dict:
                 if not city_resolved:
                     city_resolved = _resolve_city_to_county(question)
                 
-                if city_resolved and not has_county_word:
+                # Also check for explicit county names (e.g., "Broward County")
+                explicit_counties = _detect_explicit_counties(resolved_question)
+                if not explicit_counties:
+                    explicit_counties = _detect_explicit_counties(question)
+                
+                # Mixed query detection: cities + explicit counties (e.g., "Miami vs Broward County")
+                has_mixed_query = bool(city_resolved) and bool(explicit_counties)
+                
+                if (city_resolved or explicit_counties) and (not has_county_word or has_mixed_query):
                     city_was_detected = True
-                    # Try fetching from both resolved and original question
+                    # _fetch_city_trend_comparison now handles both cities AND explicit counties
                     data = _fetch_city_trend_comparison(resolved_question)
                     if not data:
                         data = _fetch_city_trend_comparison(question)
@@ -1930,9 +2035,12 @@ def generate_response(question: str) -> dict:
                 city_resolved = _resolve_city_to_county(resolved_question)
                 if not city_resolved:
                     city_resolved = _resolve_city_to_county(question)
+                explicit_counties = _detect_explicit_counties(resolved_question)
+                if not explicit_counties:
+                    explicit_counties = _detect_explicit_counties(question)
                 data = None
                 city_was_detected = False
-                if city_resolved:
+                if city_resolved or explicit_counties:
                     city_was_detected = True
                     data = _fetch_city_trend_comparison(resolved_question)
                     if not data:
