@@ -1970,9 +1970,9 @@ def _try_direct_county_lookup(question: str) -> str:
     if 'county' not in q_lower:
         # Also check for city names that map to counties
         city_match = None
-        for city_name, (county, st) in CITY_TO_COUNTY.items():
+        for city_name, (county, state_ab) in CITY_TO_COUNTY.items():
             if city_name in q_lower:
-                city_match = (county, st)
+                city_match = (county, state_ab)
                 break
         if not city_match:
             print(f"[DIRECT_COUNTY] No 'county' keyword and no city match found")
