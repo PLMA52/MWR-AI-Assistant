@@ -540,8 +540,8 @@ CITY_TO_COUNTY = {
     'madison': ('Dane', 'WI'),
     'salt lake city': ('Salt Lake', 'UT'),
     'baltimore': ('Baltimore', 'MD'),  # Baltimore City vs Baltimore County — city maps to city
-    'washington': ('District of Columbia', 'DC'),
     'washington dc': ('District of Columbia', 'DC'),
+    'washington d.c.': ('District of Columbia', 'DC'),
     'dc': ('District of Columbia', 'DC'),
     'richmond': ('Richmond City', 'VA'),
     'virginia beach': ('Virginia Beach City', 'VA'),
@@ -664,7 +664,7 @@ def _fetch_city_trend_comparison(question: str) -> list:
                     LIMIT 1
                 """, county=county, state=state))
                 
-                # Fuzzy fallback: try alternate name formats (hyphen vs space, with/without suffix)
+                # Fuzzy fallback: try alternate name formats (hyphen vs space, with/without suffix, case variants)
                 if not records:
                     alt_names = set()
                     if '-' in county:
@@ -673,6 +673,11 @@ def _fetch_city_trend_comparison(question: str) -> list:
                         alt_names.add(county.replace(' ', '-'))   # Miami Dade → Miami-Dade
                     # Also try with/without "County" suffix
                     alt_names.add(f"{county} County")
+                    # Try case variants
+                    alt_names.add(county.lower())       # Bexar → bexar
+                    alt_names.add(county.title())       # bexar → Bexar
+                    alt_names.add(county.upper())       # Bexar → BEXAR
+                    alt_names.discard(county)            # Don't retry the original
                     
                     for alt in alt_names:
                         records = list(session.run("""
@@ -707,7 +712,10 @@ def _fetch_city_trend_comparison(question: str) -> list:
                         "labor": r['labor'],
                         "living": r['living']
                     })
-        except Exception:
+        except Exception as e:
+            import traceback
+            print(f"[CITY_TREND] Error fetching {county}, {state}: {e}")
+            traceback.print_exc()
             continue
     
     return results if len(results) >= 1 else []
@@ -1860,7 +1868,7 @@ def create_hbar_chart(ranked_data: list, question: str) -> go.Figure:
     elif metric_fmt == "population":
         r_margin = 100
     else:
-        r_margin = 80
+        r_margin = 100
     
     fig.update_layout(title=dict(text=title, font=dict(size=20, color='#1B4F5C', family='Arial')),
         xaxis_title=x_label, yaxis_title="", template='plotly_white', height=chart_height,
@@ -1870,9 +1878,15 @@ def create_hbar_chart(ranked_data: list, question: str) -> go.Figure:
         yaxis=dict(tickfont=dict(size=12, color='#333333')))
     
     # Add x-axis padding so text labels don't overflow
-    if metric_fmt in ("currency", "population") and values:
+    if values:
         max_val = max(values)
-        fig.update_xaxes(range=[0, max_val * 1.25])
+        if metric_fmt == "currency":
+            fig.update_xaxes(range=[0, max_val * 1.25])
+        elif metric_fmt == "population":
+            fig.update_xaxes(range=[0, max_val * 1.25])
+        else:
+            # For decimal formats (ERI index, risk %, etc.) add 15% padding
+            fig.update_xaxes(range=[0, max_val * 1.15])
     
     if 'risk' in q_lower or 'score' in q_lower:
         fig.add_vline(x=80, line_dash="dash", line_color="#CC0000", line_width=1.5,
@@ -2030,12 +2044,32 @@ def generate_response(question: str) -> dict:
                 # Mixed query detection: cities + explicit counties (e.g., "Miami vs Broward County")
                 has_mixed_query = bool(city_resolved) and bool(explicit_counties)
                 
-                if (city_resolved or explicit_counties) and (not has_county_word or has_mixed_query):
+                if city_resolved or explicit_counties:
                     city_was_detected = True
                     # _fetch_city_trend_comparison now handles both cities AND explicit counties
                     data = _fetch_city_trend_comparison(resolved_question)
                     if not data:
                         data = _fetch_city_trend_comparison(question)
+                    
+                    # Check if this is a comparison query with partial city resolution
+                    # e.g., "Washington vs Washington DC" — DC resolved as city, WA is a state
+                    is_comparison = any(kw in q_check_cmp for kw in ['compare', ' vs ', ' vs.', 'versus', ' and '])
+                    if data and is_comparison and len(data) < 2:
+                        # Look for unresolved state names that city resolver didn't catch
+                        # Build set of already-resolved state abbreviations
+                        resolved_abbrs = set()
+                        for item in data:
+                            resolved_abbrs.add(item.get('state', ''))
+                        # Check for state names in the question that aren't yet resolved
+                        for sname in state_names:
+                            if sname in q_check_cmp:
+                                sabbr = STATE_ABBR.get(sname, '')
+                                if sabbr and sabbr not in resolved_abbrs:
+                                    # Fetch state average trend data and append
+                                    state_data = _fetch_state_trend_compare(f"compare {sname}")
+                                    if state_data:
+                                        data.extend(state_data)
+                    
                     if data:
                         chart_error += " (city→county resolved)"
                 
