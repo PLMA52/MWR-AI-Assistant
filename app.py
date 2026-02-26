@@ -443,8 +443,13 @@ PERIOD_LABELS = {
 
 def _county_label(county_name: str, state_abbr: str) -> str:
     """Format county labels for charts: 'Montgomery' -> 'Montgomery County, MD'
-    Avoids double-labeling for names already containing 'County' or 'City'."""
+    Avoids double-labeling for names already containing 'County' or 'City'.
+    Also title-cases names from Neo4j (e.g., 'Miami-dade' → 'Miami-Dade')."""
     name = str(county_name).strip()
+    # Title-case each part (handles hyphens: 'Miami-dade' → 'Miami-Dade')
+    name = '-'.join(part.capitalize() if part.islower() else part for part in name.split('-'))
+    # Also handle space-separated words that may be lowercase
+    name = ' '.join(word.capitalize() if word.islower() else word for word in name.split())
     if any(suffix in name for suffix in ['County', 'City', 'Parish', 'Borough']):
         return f"{name}, {state_abbr}"
     return f"{name} County, {state_abbr}"
