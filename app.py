@@ -2290,22 +2290,33 @@ def generate_response(question: str) -> dict:
                     
                     # Check if this is a comparison query with partial city resolution
                     # e.g., "Washington vs Washington DC" — DC resolved as city, WA is a state
-                    is_comparison = any(kw in q_check_cmp for kw in ['compare', ' vs ', ' vs.', 'versus', ' and '])
+                    is_comparison = any(kw in q_check_cmp for kw in ['compare', ' vs ', ' vs.', 'versus', ' and ', ' to '])
                     if data and is_comparison and len(data) < 2:
-                        # Look for unresolved state names that city resolver didn't catch
                         # Build set of already-resolved state abbreviations
                         resolved_abbrs = set()
                         for item in data:
                             resolved_abbrs.add(item.get('state', ''))
-                        # Check for state names in the question that aren't yet resolved
+                        
+                        # Check for state names in the question
                         for sname in state_names:
                             if sname in q_check_cmp:
                                 sabbr = STATE_ABBR.get(sname, '')
                                 if sabbr and sabbr not in resolved_abbrs:
-                                    # Fetch state average trend data and append
+                                    # Different state than the county's state — add state trend
                                     state_data = _fetch_state_trend_compare(f"compare {sname}")
                                     if state_data:
                                         data.extend(state_data)
+                                elif sabbr and sabbr in resolved_abbrs:
+                                    # SAME state as the county — this is a "county vs its parent state" comparison
+                                    # e.g., "compare Montgomery County, MD to Maryland"
+                                    # The county data is already in results; add the state AVERAGE
+                                    state_avg_data = _fetch_state_trend_compare(f"compare {sname}")
+                                    if state_avg_data:
+                                        # Relabel as "(State Avg)" to distinguish from the county
+                                        for item in state_avg_data:
+                                            if "(State Avg)" not in item["label"]:
+                                                item["label"] = f"{item['label']} (State Avg)"
+                                        data.extend(state_avg_data)
                     
                     if data:
                         chart_error += " (city→county resolved)"
@@ -2319,7 +2330,7 @@ def generate_response(question: str) -> dict:
                 if not data and not city_was_detected:
                     data = fetch_trend_data(resolved_question)
                     # Validate: for comparison queries, LLM Cypher must return 2+ results
-                    is_comparison = any(kw in q_check_cmp for kw in ['compare', ' vs ', ' vs.', 'versus', ' and '])
+                    is_comparison = any(kw in q_check_cmp for kw in ['compare', ' vs ', ' vs.', 'versus', ' and ', ' to '])
                     if data and is_comparison and len(data) < 2:
                         data = []  # Force fallback — LLM returned partial results
                 if not data:
